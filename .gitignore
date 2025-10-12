@@ -58,6 +58,7 @@ pydfs-lineup-optimizer/
 
 # Lineup output files
 lineups/
+autoMME/
 
 # Player usage reports
 player_usage_report.csv
