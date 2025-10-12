@@ -1,0 +1,13 @@
+MME 150 Selection Summary
+=========================
+Picked: 150
+Total Projection: 16244.82
+Per-player Cap (count): 37
+Max Exposure Used: 37 (24.7%)
+Max Repeat: start 4 -> final 4
+Repeat Relaxations: 0
+
+Stack Distribution (out of selected):
+  QB+2: 104
+  Bring-back >=1: 127
+  Both (QB+2 & Bring-back): 81
