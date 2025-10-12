@@ -202,11 +202,18 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         optimizer.set_max_repeating_players(MAX_REPEATING_PLAYERS)
         optimizer.set_min_salary_cap(MIN_SALARY)
         
+        # Apply D/ST vs opposing QB/RB restriction
+        try:
+            optimizer.restrict_positions_for_opposing_team(['D'], ['QB', 'RB'])
+            logger.info(f"Thread {thread_id}: Applied D/ST vs opposing QB/RB restriction")
+        except Exception as e:
+            logger.warning(f"Thread {thread_id}: Could not apply D/ST vs opposing QB/RB restriction - {str(e)}")
+        
         # Log active strategy
         strategy_info = f"ProgressiveFantasyPointsStrategy ({PROGRESSIVE_FACTOR})" if PROGRESSIVE_FACTOR > 0 else "RandomFantasyPointsStrategy"
         logger.info(f"Thread {thread_id}: Active constraints - "
                    f"Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY}), "
-                   f"{strategy_info}, MIP Solver")
+                   f"D/ST vs opposing QB/RB restriction, {strategy_info}, MIP Solver")
         
         # Continuously process batches from the queue until empty
         while not cancellation_requested.is_set():
