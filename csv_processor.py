@@ -55,12 +55,26 @@ def preprocess_csv(input_file: str) -> Tuple[str, Dict[str, float]]:
         required_columns = ['B_Id', 'B_Position', 'B_Nickname', 'B_Salary', 'A_ppg_projection', 'B_Team', 'B_Opponent', 'Random']
         missing_columns = [col for col in required_columns if col not in df.columns]
         
+        # Check if B_Game or B_B_Game column exists for game info preservation
+        has_game_info = 'B_Game' in df.columns or 'B_B_Game' in df.columns
+        game_column = 'B_Game' if 'B_Game' in df.columns else 'B_B_Game' if 'B_B_Game' in df.columns else None
+        
+        if has_game_info:
+            logger.info(f"Found {game_column} column - will preserve game information for D/ST constraints")
+        else:
+            logger.warning("B_Game/B_B_Game column not found - game information will be empty")
+        
         if missing_columns:
             logger.error(f"Missing required columns: {missing_columns}")
             raise ValueError(f"Missing required columns: {missing_columns}")
         
         # Create processed DataFrame with exact column mapping
-        processed_df = df[required_columns].copy()
+        # Include game column if available for preservation
+        columns_to_copy = required_columns.copy()
+        if has_game_info and game_column:
+            columns_to_copy.append(game_column)
+        
+        processed_df = df[columns_to_copy].copy()
         
         # Apply sanitization to each column
         logger.info("Applying sanitization to CSV data...")
@@ -102,6 +116,10 @@ def preprocess_csv(input_file: str) -> Tuple[str, Dict[str, float]]:
             'B_Opponent': 'Opponent'
         }
         
+        # Add game column mapping if available
+        if has_game_info and game_column:
+            standard_mapping[game_column] = 'Game'
+        
         processed_df = processed_df.rename(columns=standard_mapping)
         
         # Split nickname into First Name and Last Name for FanDuel format
@@ -114,7 +132,14 @@ def preprocess_csv(input_file: str) -> Tuple[str, Dict[str, float]]:
         
         # Add required columns for FanDuel NFL
         processed_df['Injury Indicator'] = ''  # Empty injury indicator
-        processed_df['Game'] = ''  # Empty game info
+        
+        # Game information is now preserved through column mapping
+        if has_game_info and game_column:
+            logger.info(f"Preserved game information from {game_column} column")
+        else:
+            # Add empty Game column if no game info available
+            processed_df['Game'] = ''
+            logger.warning("No game information available - using empty strings")
         
         # Reorder columns to match FanDuel expected format
         fanduel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
