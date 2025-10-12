@@ -9,7 +9,7 @@ STRATEGY SELECTION LOGIC:
 """
 
 # Lineup Generation Configuration
-TOTAL_LINEUPS = 500
+TOTAL_LINEUPS = 160
 NUM_WORKERS = 8
 LINEUPS_PER_BATCH = 20
 
@@ -20,7 +20,7 @@ MIN_SALARY = 59500
 
 # Strategy Configuration
 PROGRESSIVE_FACTOR = 0.0
-RANDOM_FACTOR = 5.0
+RANDOM_FACTOR = 3.0
 
 # File Configuration
 CSV_FILE = "NFL-DIRTY2.csv"
