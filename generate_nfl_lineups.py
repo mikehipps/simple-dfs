@@ -1,9 +1,12 @@
+
 #!/usr/bin/env python3
 """
-NFL Lineup Generator using pydfs-lineup-optimizer
-Generates exactly {TOTAL_LINEUPS} NFL lineups for FanDuel Classic contest from NFL6-CLEAN2.csv
-Uses {NUM_WORKERS} parallel workers with exact batch control ({BATCHES_PER_WORKER} batches x {LINEUPS_PER_BATCH} lineups per worker)
-Applies both ProgressiveFantasyPointsStrategy (0.02) and RandomFantasyPointsStrategy
+NFL Lineup Generator using pydfs-lineup-optimizer with Dynamic Queue System
+Generates exactly {TOTAL_LINEUPS} NFL lineups for FanDuel Classic contest from {CSV_FILE}
+Uses {NUM_WORKERS} parallel workers with dynamic queue for optimal load balancing
+Automatically selects strategy based on PROGRESSIVE_FACTOR:
+- ProgressiveFantasyPointsStrategy when PROGRESSIVE_FACTOR > 0
+- RandomFantasyPointsStrategy when PROGRESSIVE_FACTOR = 0
 Features graceful cancellation support with Ctrl+C to save partial results
 
 VIRTUAL ENVIRONMENT REMINDER:
@@ -25,6 +28,7 @@ import threading
 import time
 import signal
 import pandas as pd
+import queue
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydfs_lineup_optimizer import Site, Sport, get_optimizer
@@ -32,16 +36,113 @@ from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
 from pydfs_lineup_optimizer.fantasy_points_strategy import BaseFantasyPointsStrategy, ProgressiveFantasyPointsStrategy
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
 
+# Import configuration from external file
+try:
+    from inputs import (
+        TOTAL_LINEUPS,
+        NUM_WORKERS,
+        LINEUPS_PER_BATCH,
+        MAX_EXPOSURE,
+        MAX_REPEATING_PLAYERS,
+        MIN_SALARY,
+        PROGRESSIVE_FACTOR,
+        CSV_FILE
+    )
+except ImportError:
+    print("ERROR: Configuration file 'inputs.py' not found.")
+    print("Please copy 'inputs_template.py' to 'inputs.py' and modify the values as needed.")
+    sys.exit(1)
+
+# CSV preprocessing function for exact column matching
+def preprocess_csv(input_file):
+    """
+    Preprocess CSV file with exact column matching for FanDuel NFL format
+    
+    Args:
+        input_file (str): Path to input CSV file
+        
+    Returns:
+        tuple: (processed_file_path, random_values_dict)
+    """
+    import pandas as pd
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting CSV preprocessing for: {input_file}")
+    
+    try:
+        # Read the original CSV
+        df = pd.read_csv(input_file)
+        logger.info(f"Original CSV shape: {df.shape}")
+        logger.info(f"Original columns: {list(df.columns)}")
+        
+        # Check for required columns with exact matching
+        required_columns = ['B_Id', 'B_Position', 'B_Nickname', 'B_Salary', 'A_ppg_projection', 'B_Opponent', 'Random']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            logger.error(f"Missing required columns: {missing_columns}")
+            raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        # Create random values dictionary for strategy
+        random_values_dict = {}
+        for _, row in df.iterrows():
+            player_id = str(row['B_Id'])
+            random_value = row['Random']
+            if pd.notna(random_value):
+                random_values_dict[player_id] = random_value
+        
+        logger.info(f"Created random values dictionary with {len(random_values_dict)} players")
+        
+        # Create processed DataFrame with exact column mapping
+        processed_df = df[required_columns].copy()
+        
+        # Apply standard column mapping for FanDuel
+        standard_mapping = {
+            'B_Id': 'Id',
+            'B_Position': 'Position',
+            'B_Nickname': 'Nickname',
+            'B_Salary': 'Salary',
+            'A_ppg_projection': 'FPPG',
+            'B_Opponent': 'Team'
+        }
+        
+        processed_df = processed_df.rename(columns=standard_mapping)
+        
+        # Split nickname into First Name and Last Name for FanDuel format
+        processed_df['First Name'] = processed_df['Nickname'].apply(
+            lambda x: x.split()[0] if pd.notna(x) else ''
+        )
+        processed_df['Last Name'] = processed_df['Nickname'].apply(
+            lambda x: ' '.join(x.split()[1:]) if pd.notna(x) and len(x.split()) > 1 else ''
+        )
+        
+        # Add required columns for FanDuel NFL
+        processed_df['Injury Indicator'] = ''  # Empty injury indicator
+        processed_df['Game'] = ''  # Empty game info
+        processed_df['Roster Position'] = processed_df['Position']
+        
+        # Reorder columns to match FanDuel expected format
+        fanduel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Salary', 'Injury Indicator', 'Roster Position']
+        processed_df = processed_df[fanduel_columns]
+        
+        # Save processed CSV
+        processed_file = 'processed_lineup_data.csv'
+        processed_df.to_csv(processed_file, index=False)
+        
+        logger.info(f"Processed CSV saved as: {processed_file}")
+        logger.info(f"Processed CSV shape: {processed_df.shape}")
+        logger.info(f"Processed columns: {list(processed_df.columns)}")
+        
+        return processed_file, random_values_dict
+        
+    except Exception as e:
+        logger.error(f"Error preprocessing CSV: {str(e)}")
+        raise
+
 
 # Global cancellation flag for graceful shutdown
 cancellation_requested = threading.Event()
-
-
-# Configuration Variables
-TOTAL_LINEUPS = 500
-NUM_WORKERS = 8
-LINEUPS_PER_BATCH = 50
-BATCHES_PER_WORKER = TOTAL_LINEUPS // (NUM_WORKERS * LINEUPS_PER_BATCH)
 
 
 def setup_logging():
@@ -51,7 +152,7 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler('nfl_lineup_generator.log')
+            logging.FileHandler('nfl_lineup_generator_dynamic.log')
         ]
     )
     return logging.getLogger(__name__)
@@ -119,112 +220,51 @@ class RandomFantasyPointsStrategy(BaseFantasyPointsStrategy):
             return player.fppg
 
 
-def preprocess_csv(input_file):
+
+
+def create_work_queue(total_lineups, lineups_per_batch):
     """
-    Preprocess the CSV file to handle duplicate columns and map to required format
+    Create a queue with all batch work items needed to generate exact lineup count
     
     Args:
-        input_file (str): Path to input CSV file
+        total_lineups (int): Total number of lineups to generate
+        lineups_per_batch (int): Number of lineups per batch
         
     Returns:
-        tuple: (processed_file_path, random_values_dict)
+        queue.Queue: Queue containing batch work items
     """
-    logger = logging.getLogger(__name__)
+    # Calculate exact number of batches needed
+    total_batches_needed = total_lineups // lineups_per_batch
     
-    try:
-        # Read the original CSV
-        df = pd.read_csv(input_file)
-        logger.info(f"Original CSV shape: {df.shape}")
-        logger.info(f"Original columns: {list(df.columns)}")
-        
-        # Check for duplicate B_Position column
-        position_cols = [col for col in df.columns if 'B_Position' in col]
-        if len(position_cols) > 1:
-            logger.warning(f"Found duplicate position columns: {position_cols}")
-            # Keep only the first B_Position column
-            df = df.loc[:, ~df.columns.duplicated()]
-            logger.info("Removed duplicate columns")
-        
-        # Verify required columns exist including Random
-        required_columns = ['B_Id', 'B_Position', 'B_Nickname', 'B_Salary', 'A_ppg_projection', 'B_Opponent', 'Random']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        
-        if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}")
-            raise ValueError(f"Missing required columns: {missing_columns}")
-        
-        # Create random values dictionary for strategy
-        random_values_dict = {}
-        for _, row in df.iterrows():
-            player_id = str(row['B_Id'])
-            random_value = row['Random']
-            if pd.notna(random_value):
-                random_values_dict[player_id] = random_value
-        
-        logger.info(f"Created random values dictionary with {len(random_values_dict)} players")
-        
-        # Create a processed CSV with mapped columns for the optimizer
-        processed_df = df[required_columns].copy()
-        
-        # Rename columns to match FanDuel CSV format expectations
-        column_mapping = {
-            'B_Id': 'Id',
-            'B_Position': 'Position',
-            'B_Nickname': 'Nickname',
-            'B_Salary': 'Salary',
-            'A_ppg_projection': 'FPPG',
-            'B_Opponent': 'Team'
-        }
-        
-        processed_df = processed_df.rename(columns=column_mapping)
-        
-        # Split nickname into First Name and Last Name for FanDuel format
-        processed_df['First Name'] = processed_df['Nickname'].apply(lambda x: x.split()[0] if pd.notna(x) else '')
-        processed_df['Last Name'] = processed_df['Nickname'].apply(lambda x: ' '.join(x.split()[1:]) if pd.notna(x) and len(x.split()) > 1 else '')
-        
-        # Add required columns for FanDuel NFL
-        processed_df['Injury Indicator'] = ''  # Empty injury indicator
-        processed_df['Game'] = ''  # Empty game info
-        processed_df['Roster Position'] = processed_df['Position']
-        
-        # Reorder columns to match FanDuel expected format
-        fan_duel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Salary', 'Injury Indicator', 'Roster Position']
-        processed_df = processed_df[fan_duel_columns]
-        
-        # Save processed CSV
-        processed_file = 'NFL6-CLEAN2-processed.csv'
-        processed_df.to_csv(processed_file, index=False)
-        
-        logger.info(f"Processed CSV saved as: {processed_file}")
-        logger.info(f"Processed CSV shape: {processed_df.shape}")
-        logger.info(f"Processed columns: {list(processed_df.columns)}")
-        
-        return processed_file, random_values_dict
-        
-    except Exception as e:
-        logger.error(f"Error preprocessing CSV: {str(e)}")
-        raise
+    # Create queue with batch work items
+    work_queue = queue.Queue()
+    for batch_id in range(total_batches_needed):
+        work_queue.put(batch_id)
+    
+    return work_queue, total_batches_needed
 
 
-def generate_lineups_threaded(thread_id, processed_csv, random_values_dict, file_lock, all_lineups, target_count, process_start_time):
+def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict, work_queue, 
+                                   file_lock, all_lineups, total_batches, process_start_time):
     """
-    Generate lineups in a single thread with exact batch control to prevent overshooting
+    Worker function that continuously processes batches from the shared queue
     
     Args:
         thread_id (int): Thread identifier
         processed_csv (str): Path to processed CSV file
         random_values_dict (dict): Dictionary mapping player IDs to random percentage values
+        work_queue (queue.Queue): Shared queue containing batch work items
         file_lock (threading.Lock): Lock for thread-safe file operations
         all_lineups (list): Shared list to collect all generated lineups
-        target_count (int): Target total number of lineups to generate
+        total_batches (int): Total number of batches in the queue
         process_start_time (float): Timestamp when the overall process started
-    
+        
     Returns:
         tuple: (thread_id, success, lineups_generated, error_message)
     """
     logger = logging.getLogger(__name__)
-    thread_lineups = []
     thread_start_time = time.time()
+    total_generated = 0
     
     try:
         logger.info(f"Thread {thread_id}: Initializing optimizer with MIP Solver")
@@ -234,68 +274,77 @@ def generate_lineups_threaded(thread_id, processed_csv, random_values_dict, file
         logger.info(f"Thread {thread_id}: Loading players from CSV")
         optimizer.load_players_from_csv(processed_csv)
         
-        # Apply ProgressiveFantasyPointsStrategy with scale 0.02
-        progressive_strategy = ProgressiveFantasyPointsStrategy(scale=0.03)
-        optimizer.set_fantasy_points_strategy(progressive_strategy)
-        
-        # Apply RandomFantasyPointsStrategy
-        random_strategy = RandomFantasyPointsStrategy(random_values_dict)
-        optimizer.set_fantasy_points_strategy(random_strategy)
+        # Apply strategy based on PROGRESSIVE_FACTOR value
+        if PROGRESSIVE_FACTOR > 0:
+            # Use ProgressiveFantasyPointsStrategy only
+            progressive_strategy = ProgressiveFantasyPointsStrategy(scale=PROGRESSIVE_FACTOR)
+            optimizer.set_fantasy_points_strategy(progressive_strategy)
+            logger.info(f"Thread {thread_id}: Using ProgressiveFantasyPointsStrategy with scale {PROGRESSIVE_FACTOR}")
+        else:
+            # Use RandomFantasyPointsStrategy only
+            random_strategy = RandomFantasyPointsStrategy(random_values_dict)
+            optimizer.set_fantasy_points_strategy(random_strategy)
+            logger.info(f"Thread {thread_id}: Using RandomFantasyPointsStrategy with {len(random_values_dict)} players")
         
         # Apply constraints
-        optimizer.set_max_repeating_players(3)  # Changed from 5 to 3
-        optimizer.set_min_salary_cap(59500)
+        optimizer.set_max_repeating_players(MAX_REPEATING_PLAYERS)
+        optimizer.set_min_salary_cap(MIN_SALARY)
         
-        # Log all active constraints and strategies
+        # Log active strategy
+        strategy_info = f"ProgressiveFantasyPointsStrategy ({PROGRESSIVE_FACTOR})" if PROGRESSIVE_FACTOR > 0 else "RandomFantasyPointsStrategy"
         logger.info(f"Thread {thread_id}: Active constraints - "
-                   f"Max exposure (25%), Max repeating players (3), Min salary ($59,500), "
-                   f"ProgressiveFantasyPointsStrategy (0.02), RandomFantasyPointsStrategy, MIP Solver")
+                   f"Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY}), "
+                   f"{strategy_info}, MIP Solver")
         
-        # Calculate exact batches needed per worker using parameterized variables
-        batch_size = LINEUPS_PER_BATCH
-        total_batches_needed = target_count // batch_size  # TOTAL_LINEUPS / LINEUPS_PER_BATCH
-        batches_per_worker = total_batches_needed // NUM_WORKERS  # Total batches / NUM_WORKERS
-        
-        logger.info(f"Thread {thread_id}: Will generate exactly {batches_per_worker} batches ({batches_per_worker * batch_size} lineups)")
-        
-        # Generate lineups in exact batches per worker
-        total_generated = 0
-        
-        for batch_num in range(1, batches_per_worker + 1):
-            # Check for cancellation request before starting each batch
-            if cancellation_requested.is_set():
-                logger.info(f"Thread {thread_id}: Cancellation requested, stopping after batch {batch_num-1}")
-                break
-                
-            batch_start_time = time.time()
-            
-            logger.info(f"Thread {thread_id}: Batch {batch_num}/{batches_per_worker} - Generating {batch_size} lineups with 25% max exposure")
-            
+        # Continuously process batches from the queue until empty
+        while not cancellation_requested.is_set():
             try:
-                lineups = list(optimizer.optimize(batch_size, max_exposure=0.25))
+                # Get next batch from queue with timeout to check cancellation
+                batch_id = work_queue.get(timeout=1)
                 
-                if not lineups:
-                    logger.warning(f"Thread {thread_id}: No lineups generated in batch {batch_num}")
-                    continue
+                # Calculate queue progress
+                queue_size = work_queue.qsize()
+                batches_remaining = queue_size + 1  # +1 for current batch
+                batches_completed = total_batches - batches_remaining
                 
-                # Thread-safe addition to shared list
-                with file_lock:
-                    all_lineups.extend(lineups)
-                    total_generated += len(lineups)
+                batch_start_time = time.time()
                 
-                # Calculate timing
-                batch_duration = time.time() - batch_start_time
-                total_duration = time.time() - process_start_time
+                logger.info(f"Thread {thread_id}: Batch {batch_id+1}/{total_batches} - "
+                           f"Queue: {batches_completed}/{total_batches} batches completed - "
+                           f"Generating {LINEUPS_PER_BATCH} lineups")
                 
-                logger.info(f"Thread {thread_id}: Batch {batch_num}/{batches_per_worker} - Generated {len(lineups)} lineups "
-                           f"({batch_duration:.1f}s : {total_duration:.1f}s)")
+                try:
+                    lineups = list(optimizer.optimize(LINEUPS_PER_BATCH, max_exposure=MAX_EXPOSURE))
+                    
+                    if not lineups:
+                        logger.warning(f"Thread {thread_id}: No lineups generated in batch {batch_id+1}")
+                        work_queue.task_done()
+                        continue
+                    
+                    # Thread-safe addition to shared list
+                    with file_lock:
+                        all_lineups.extend(lineups)
+                        total_generated += len(lineups)
+                    
+                    # Calculate timing
+                    batch_duration = time.time() - batch_start_time
+                    total_duration = time.time() - process_start_time
+                    
+                    logger.info(f"Thread {thread_id}: Batch {batch_id+1}/{total_batches} - "
+                               f"Generated {len(lineups)} lineups "
+                               f"({batch_duration:.1f}s : {total_duration:.1f}s)")
+                    
+                except LineupOptimizerException as e:
+                    logger.error(f"Thread {thread_id}: Optimizer error in batch {batch_id+1} - {str(e)}")
+                except Exception as e:
+                    logger.error(f"Thread {thread_id}: Unexpected error in batch {batch_id+1} - {str(e)}")
                 
-            except LineupOptimizerException as e:
-                logger.error(f"Thread {thread_id}: Optimizer error in batch {batch_num} - {str(e)}")
-                continue
-            except Exception as e:
-                logger.error(f"Thread {thread_id}: Unexpected error in batch {batch_num} - {str(e)}")
-                continue
+                # Mark batch as completed
+                work_queue.task_done()
+                
+            except queue.Empty:
+                # Queue is empty, worker can exit
+                break
         
         thread_duration = time.time() - thread_start_time
         logger.info(f"Thread {thread_id}: Completed with {total_generated} total lineups generated in {thread_duration:.1f}s")
@@ -356,31 +405,39 @@ def save_partial_results(all_lineups, process_start_time):
     return lineup_filepath, usage_filepath
 
 
-def generate_lineups():
-    """Generate exactly {TOTAL_LINEUPS} NFL lineups using {NUM_WORKERS} parallel workers with exact batch control"""
+def generate_lineups_dynamic():
+    """Generate exactly {TOTAL_LINEUPS} NFL lineups using dynamic queue system with {NUM_WORKERS} workers"""
     logger = logging.getLogger(__name__)
     process_start_time = time.time()
     
     try:
-        # Preprocess the CSV file - now returns tuple (processed_file, random_values_dict)
-        processed_csv, random_values_dict = preprocess_csv('NFL6-CLEAN2.csv')
+        # Preprocess the CSV file
+        processed_csv, random_values_dict = preprocess_csv(CSV_FILE)
+        
+        # Create dynamic work queue with exact batch calculation
+        work_queue, total_batches = create_work_queue(TOTAL_LINEUPS, LINEUPS_PER_BATCH)
         
         # Shared resources for threads
         file_lock = threading.Lock()
         all_lineups = []
-        target_count = TOTAL_LINEUPS
         
-        logger.info(f"Starting parallel lineup generation with {NUM_WORKERS} workers")
-        logger.info(f"Target: {target_count} total lineups using exact batch control")
-        logger.info(f"Configuration: {NUM_WORKERS} workers × {BATCHES_PER_WORKER} batches × {LINEUPS_PER_BATCH} lineups = {TOTAL_LINEUPS} lineups exactly")
-        logger.info(f"Using MIP Solver, ProgressiveFantasyPointsStrategy (0.02), and RandomFantasyPointsStrategy with {len(random_values_dict)} players")
-        logger.info("Active constraints: Max exposure (25%), Max repeating players (3), Min salary ($59,500)")
+        logger.info(f"Starting dynamic queue lineup generation with {NUM_WORKERS} workers")
+        logger.info(f"Target: {TOTAL_LINEUPS} total lineups using dynamic queue system")
+        logger.info(f"Configuration: {total_batches} batches × {LINEUPS_PER_BATCH} lineups = {TOTAL_LINEUPS} lineups exactly")
+        # Log strategy selection
+        if PROGRESSIVE_FACTOR > 0:
+            logger.info(f"Using MIP Solver and ProgressiveFantasyPointsStrategy ({PROGRESSIVE_FACTOR})")
+        else:
+            logger.info(f"Using MIP Solver and RandomFantasyPointsStrategy with {len(random_values_dict)} players")
+        logger.info(f"Active constraints: Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY})")
+        logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
         # Use ThreadPoolExecutor for better resource management
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            # Submit all thread tasks with target count and process start time
+            # Submit all worker tasks with dynamic queue
             future_to_thread = {
-                executor.submit(generate_lineups_threaded, i, processed_csv, random_values_dict, file_lock, all_lineups, target_count, process_start_time): i
+                executor.submit(generate_lineups_dynamic_worker, i, processed_csv, random_values_dict, 
+                               work_queue, file_lock, all_lineups, total_batches, process_start_time): i
                 for i in range(NUM_WORKERS)
             }
             
@@ -430,7 +487,6 @@ def generate_lineups():
         os.makedirs(lineups_dir, exist_ok=True)
         
         # Generate file names with dynamic timestamp and lineup count
-        # Format: MMDDYYYY-HHMM (24-hour format)
         current_time = datetime.now()
         date_stamp = current_time.strftime("%m%d%Y-%H%M")  # MMDDYYYY-HHMM format
         lineup_count = len(all_lineups)
@@ -541,18 +597,18 @@ def main():
     # Register signal handler for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     
-    logger.info("Starting NFL Lineup Generator")
+    logger.info("Starting NFL Lineup Generator with Dynamic Queue System")
     logger.info("=" * 50)
     logger.info("Press Ctrl+C at any time to gracefully stop the process and save partial results")
     logger.info("=" * 50)
     
     # Check if input file exists
-    if not os.path.exists('NFL6-CLEAN2.csv'):
-        logger.error("Input file 'NFL6-CLEAN2.csv' not found")
+    if not os.path.exists(CSV_FILE):
+        logger.error(f"Input file '{CSV_FILE}' not found")
         sys.exit(1)
     
     # Generate lineups
-    result = generate_lineups()
+    result = generate_lineups_dynamic()
     
     if result:
         lineup_filepath, usage_filepath, all_lineups = result

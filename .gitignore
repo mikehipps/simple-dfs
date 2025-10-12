@@ -45,3 +45,9 @@ csv_examples/
 
 # Documentation build files
 docs/_build/
+
+# Configuration files (use inputs_template.py as template)
+inputs.py
+
+# Project memory file (personal context, not code documentation)
+MEMORY.md
