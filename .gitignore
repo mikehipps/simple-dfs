@@ -66,3 +66,5 @@ processed_lineup_data.csv
 # Test files
 test_*.csv
 sanitized_*.csv
+autoMME/mme150_summary.txt
+autoMME/mme150-2025-10-12-11-28_summary.txt

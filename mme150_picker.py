@@ -1,240 +1,223 @@
 #!/usr/bin/env python3
 """
-MME 150 Lineup Auto-Selector (FanDuel NFL)
-------------------------------------------
-- Input: lineup pool CSV (50k), projections CSV, FanDuel upload template CSV
-- Output: FanDuel-formatted upload CSV for the selected 150 lineups,
-          a player usage report (selected vs full pool),
-          and a summary.txt with totals + stack distribution + any cap relaxations.
-
-Assumptions for v1 (based on your files):
-- Lineups CSV columns include: QB, RB, RB.1, WR, WR.1, WR.2, TE, FLEX, DEF, Budget, FPPG
-  Each cell looks like 'Name(121339-XXXXX)'. We extract the id in parentheses.
-- Projections CSV columns include (at least): B_Id, B_Position, A_ppg_projection, B_Opponent
-  If a team column exists (e.g., B_Team), we'll use it; otherwise stack bonuses will be minimal.
-- FanDuel template CSV provides the roster column order to write (QB, RB, RB.1, WR, WR.1, WR.2, TE, FLEX, DEF, ...).
+MME 150 Lineup Auto-Selector (FanDuel NFL) — with pruning + usage report + summary
+-----------------------------------------------------------------------------------
+- Prompts for: lineup pool CSV (~50k), projections CSV, FanDuel upload template CSV
+- Auto-prunes lineups that include any player under a pool-usage cutoff (default 2%)
+- Picks 150 lineups preferring high projection, uniqueness, stack bonuses, and breadth
+- Outputs to ./autoMME by default:
+    - <prefix>_fanduel_upload.csv   (columns follow your FD template)
+    - <prefix>_usage_report.csv     (player name, 150-exposure, pool-exposure, delta)
+    - <prefix>_summary.txt          (totals, exposure max, stack distribution, prune stats)
 
 Run:
-  python mme150_picker.py
-It will prompt for the three files via a file picker (Tk), or fallback to CLI paths.
+    python mme150_picker.py [--cap 25] [--repeat 4] [--min-usage-pct 2] [--out-prefix week6] [--out-dir autoMME]
 """
 
-import re
-import math
-import sys
-import argparse
-import random
+import re, math, sys, argparse, random, csv
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Set
 from pathlib import Path
-
+from datetime import datetime  # add near the top
 import pandas as pd
 
-# ------------------- File pickers -------------------
 
-def pick_file_cli_or_gui(title: str) -> str:
-    """Try a Tk file picker. If it fails (e.g., headless), fallback to input()."""
-    try:
-        import tkinter as tk
-        from tkinter.filedialog import askopenfilename
-        root = tk.Tk()
-        root.withdraw()
-        fp = askopenfilename(title=title, filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
-        root.update()
-        root.destroy()
-        if fp:
-            return fp
-    except Exception:
-        pass
-    # CLI fallback
-    return input(f"{title} (path): ").strip()
-
-
-# ------------------- Helpers -------------------
-
-ID_REGEX = re.compile(r"\(([^)]+)\)\s*$")  # capture text inside last parentheses
+# ------------------- Roster + parsing helpers -------------------
 
 ROSTER_COLS = ["QB","RB","RB.1","WR","WR.1","WR.2","TE","FLEX","DEF"]
+ID_REGEX = re.compile(r"\(([^)]+)\)\s*$")  # Name(PLAYERID) → capture PLAYERID
 
 def extract_player_id(cell: str) -> str:
-    if not isinstance(cell, str):
-        return ""
+    if not isinstance(cell, str): return ""
     m = ID_REGEX.search(cell)
     return m.group(1) if m else cell.strip()
 
-
 def extract_player_name(cell: str) -> str:
-    """Best-effort: name part before '(id)'."""
-    if not isinstance(cell, str):
-        return ""
+    if not isinstance(cell, str): return ""
     i = cell.rfind('(')
     return cell[:i].strip() if i > 0 else cell.strip()
 
+# ------------------- File picker -------------------
+
+def pick_file_cli_or_gui(title: str) -> str:
+    """Try Tk file picker; if unavailable, fall back to stdin path."""
+    try:
+        import tkinter as tk
+        from tkinter.filedialog import askopenfilename
+        root = tk.Tk(); root.withdraw()
+        fp = askopenfilename(title=title, filetypes=[("CSV files","*.csv"), ("All files","*.*")])
+        root.update(); root.destroy()
+        if fp: return fp
+    except Exception:
+        pass
+    return input(f"{title} (path): ").strip()
+
+# ------------------- Projections detection -------------------
 
 def detect_columns(df: pd.DataFrame) -> Tuple[str, str, str, Optional[str], Optional[str]]:
-    """
-    For projections: return (id_col, proj_col, pos_col, team_col_opt, name_col_opt)
-    Prefers known names, falls back to heuristics.
-    """
+    """Return (id_col, proj_col, pos_col, team_col?, name_col?)."""
     # ID
     id_col = None
     for c in ["B_Id","Id","PlayerId","Player_ID","PLAYER_ID","id"]:
-        if c in df.columns:
-            id_col = c
-            break
+        if c in df.columns: id_col = c; break
     if id_col is None:
-        candidates = [c for c in df.columns if "id" in c.lower()]
-        id_col = min(candidates, key=len) if candidates else df.columns[0]
-
+        cands = [c for c in df.columns if "id" in c.lower()]
+        id_col = min(cands, key=len) if cands else df.columns[0]
     # Projection
     proj_col = "A_ppg_projection" if "A_ppg_projection" in df.columns else None
     if proj_col is None:
         for c in df.columns:
             cl = c.lower()
             if "proj" in cl or cl in ("fppg","points","projection","ppg"):
-                proj_col = c
-                break
+                proj_col = c; break
     if proj_col is None:
         raise ValueError("Could not detect projection column in projections CSV.")
-
     # Position
     pos_col = None
     for c in ["B_Position","Position","POS","Pos"]:
-        if c in df.columns:
-            pos_col = c
-            break
+        if c in df.columns: pos_col = c; break
     if pos_col is None:
-        candidates = [c for c in df.columns if "pos" in c.lower() or "position" in c.lower()]
-        pos_col = candidates[0] if candidates else None
+        cands = [c for c in df.columns if "pos" in c.lower() or "position" in c.lower()]
+        pos_col = cands[0] if cands else None
     if pos_col is None:
         raise ValueError("Could not detect position column in projections CSV.")
-
     # Team (optional)
     team_col = None
     for c in ["B_Team","Team","TEAM","Tm","team"]:
-        if c in df.columns:
-            team_col = c
-            break
+        if c in df.columns: team_col = c; break
     if team_col is None:
-        candidates = [c for c in df.columns if "team" in c.lower() and "opp" not in c.lower()]
-        team_col = candidates[0] if candidates else None
-
+        cands = [c for c in df.columns if "team" in c.lower() and "opp" not in c.lower()]
+        team_col = cands[0] if cands else None
     # Name (optional)
     name_col = None
     for c in ["B_Nickname","Nickname","Player","Name","PLAYER","PLAYER_NAME","FullName"]:
-        if c in df.columns:
-            name_col = c
-            break
-
+        if c in df.columns: name_col = c; break
     return id_col, proj_col, pos_col, team_col, name_col
-
-
-@dataclass(frozen=True)
-class Lineup:
-    idx: int
-    salary: int
-    players_id: Tuple[str, ...]     # tuple of player ids (length 9)
-    players_txt: Tuple[str, ...]    # tuple of "Name(id)" strings for export
-    proj_sum: float
-    qb_team: Optional[str]
-    qb_opp: Optional[str]
-    wr_te_on_qb_team: int
-    bringbacks: int
-    uniq_logsum: float              # -sum(log(usage_i)) precomputed
-    chalk_sum: float                # sum(usage_i)
-
-
-# ------------------- Core processing -------------------
-
-def load_lineups(lineups_csv: str) -> pd.DataFrame:
-    df = pd.read_csv(lineups_csv)
-    # sanity check
-    for col in ROSTER_COLS:
-        if col not in df.columns:
-            raise ValueError(f"Lineups CSV missing required column: {col}")
-    return df
-
 
 def load_projections(proj_csv: str) -> Tuple[pd.DataFrame, str, str, str, Optional[str], Optional[str]]:
     df = pd.read_csv(proj_csv)
     id_col, proj_col, pos_col, team_col, name_col = detect_columns(df)
-    # Opponent is optional but useful
+    # Opponent (optional)
     opp_col = None
     for c in ["B_Opponent","Opponent","Opp","OPP","opp"]:
-        if c in df.columns:
-            opp_col = c
-            break
+        if c in df.columns: opp_col = c; break
     if opp_col is None:
-        candidates = [c for c in df.columns if "opp" in c.lower()]
-        opp_col = candidates[0] if candidates else None
-
-    # Standardize names for maps
-    rename_map = {id_col:"B_Id", proj_col:"A_ppg_projection", pos_col:"B_Position"}
-    if team_col: rename_map[team_col] = "B_Team"
-    if opp_col:  rename_map[opp_col]  = "B_Opponent"
-    if name_col: rename_map[name_col] = "B_Name"
-    std = df.rename(columns=rename_map)
-
+        cands = [c for c in df.columns if "opp" in c.lower()]
+        opp_col = cands[0] if cands else None
+    # Rename to standardized columns
+    ren = {id_col:"B_Id", proj_col:"A_ppg_projection", pos_col:"B_Position"}
+    if team_col: ren[team_col] = "B_Team"
+    if opp_col:  ren[opp_col]  = "B_Opponent"
+    if name_col: ren[name_col] = "B_Name"
+    std = df.rename(columns=ren)
     keep = ["B_Id","A_ppg_projection","B_Position"]
     if "B_Team" in std.columns: keep.append("B_Team")
     if "B_Opponent" in std.columns: keep.append("B_Opponent")
     if "B_Name" in std.columns: keep.append("B_Name")
     std = std[keep].copy()
-    return std, "B_Id", "A_ppg_projection", "B_Position", "B_Team" if "B_Team" in std.columns else None, "B_Name" if "B_Name" in std.columns else None
+    return std, "B_Id", "A_ppg_projection", "B_Position", ("B_Team" if "B_Team" in std.columns else None), ("B_Name" if "B_Name" in std.columns else None)
 
+def load_lineups(lineups_csv: str) -> pd.DataFrame:
+    df = pd.read_csv(lineups_csv)
+    for col in ROSTER_COLS:
+        if col not in df.columns:
+            raise ValueError(f"Lineups CSV missing required column: {col}")
+    return df
 
-def build_player_maps(proj_df: pd.DataFrame) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, Optional[str]], Dict[str, Optional[str]], Dict[str, Optional[str]]]:
+def build_player_maps(proj_df: pd.DataFrame):
     proj_map, pos_map, team_map, opp_map, name_map = {}, {}, {}, {}, {}
     has_team = "B_Team" in proj_df.columns
-    has_opp = "B_Opponent" in proj_df.columns
+    has_opp  = "B_Opponent" in proj_df.columns
     has_name = "B_Name" in proj_df.columns
     for _, r in proj_df.iterrows():
         pid = str(r["B_Id"])
         proj_map[pid] = float(r["A_ppg_projection"]) if pd.notna(r["A_ppg_projection"]) else 0.0
         pos_map[pid]  = str(r["B_Position"]) if pd.notna(r["B_Position"]) else ""
-        team_map[pid] = (str(r["B_Team"]) if pd.notna(r["B_Team"]) else None) if has_team else None
-        opp_map[pid]  = (str(r["B_Opponent"]) if pd.notna(r["B_Opponent"]) else None) if has_opp else None
-        name_map[pid] = (str(r["B_Name"]) if pd.notna(r["B_Name"]) else None) if has_name else None
+        team_map[pid] = (str(r["B_Team"]) if pd.notna(r.get("B_Team", None)) else None) if has_team else None
+        opp_map[pid]  = (str(r["B_Opponent"]) if pd.notna(r.get("B_Opponent", None)) else None) if has_opp else None
+        name_map[pid] = (str(r["B_Name"]) if pd.notna(r.get("B_Name", None)) else None) if has_name else None
     return proj_map, pos_map, team_map, opp_map, name_map
 
+# ------------------- Pool usage + pruning -------------------
 
 def compute_pool_usage(lineups_df: pd.DataFrame) -> Dict[str, float]:
-    """Usage fraction per player across the entire pool."""
     from collections import Counter
     cnt = Counter()
     total = len(lineups_df)
     for _, r in lineups_df.iterrows():
         for col in ROSTER_COLS:
             pid = extract_player_id(r[col])
-            if pid:
-                cnt[pid] += 1
-    return {pid: c/total for pid, c in cnt.items()}
+            if pid: cnt[pid] += 1
+    return {pid: c / total for pid, c in cnt.items()}
 
+def unique_players_in_df(lineups_df: pd.DataFrame) -> Set[str]:
+    s: Set[str] = set()
+    for _, r in lineups_df.iterrows():
+        for col in ROSTER_COLS:
+            s.add(extract_player_id(r[col]))
+    return s
+
+def prune_by_min_usage(lineups_df: pd.DataFrame, min_usage_frac: float):
+    """
+    Drop any lineup that contains a player whose pool usage < min_usage_frac.
+    Returns: pruned_df, stats_dict, low_players_set
+    """
+    usage_full = compute_pool_usage(lineups_df)
+    low_players = {pid for pid, u in usage_full.items() if u < min_usage_frac}
+    if not low_players:
+        stats = {
+            "n_before": len(lineups_df),
+            "n_after": len(lineups_df),
+            "removed_lineups": 0,
+            "players_before": len(unique_players_in_df(lineups_df)),
+            "players_after": len(unique_players_in_df(lineups_df)),
+            "removed_players": 0,
+        }
+        return lineups_df, stats, low_players
+    # fast vectorized mask: reject rows where any roster slot is a low-usage player
+    bad_mask = lineups_df[ROSTER_COLS].applymap(extract_player_id).isin(low_players).any(axis=1)
+    pruned = lineups_df[~bad_mask].reset_index(drop=True)
+    stats = {
+        "n_before": len(lineups_df),
+        "n_after": len(pruned),
+        "removed_lineups": int(bad_mask.sum()),
+        "players_before": len(unique_players_in_df(lineups_df)),
+        "players_after": len(unique_players_in_df(pruned)),
+        "removed_players": len(unique_players_in_df(lineups_df)) - len(unique_players_in_df(pruned)),
+    }
+    return pruned, stats, low_players
+
+# ------------------- Lineup object + selection -------------------
+
+@dataclass(frozen=True)
+class Lineup:
+    idx: int
+    salary: int
+    players_id: Tuple[str, ...]
+    players_txt: Tuple[str, ...]
+    proj_sum: float
+    qb_team: Optional[str]
+    qb_opp: Optional[str]
+    wr_te_on_qb_team: int
+    bringbacks: int
+    uniq_logsum: float
+    chalk_sum: float
 
 def make_lineup_objects(lineups_df: pd.DataFrame, proj_map: Dict[str,float],
                         team_map: Dict[str,Optional[str]], opp_map: Dict[str,Optional[str]],
                         pos_map: Dict[str,str], usage: Dict[str,float]) -> List[Lineup]:
-    objs = []
+    objs: List[Lineup] = []
     for idx, r in lineups_df.iterrows():
-        players_txt = []
-        players_id = []
-        for col in ROSTER_COLS:
-            cell = r[col]
-            players_txt.append(str(cell))
-            players_id.append(extract_player_id(str(cell)))
+        players_txt = [str(r[c]) for c in ROSTER_COLS]
+        players_id  = [extract_player_id(str(r[c])) for c in ROSTER_COLS]
         salary = int(r["Budget"]) if "Budget" in r and pd.notna(r["Budget"]) else 0
-
         # projection sum
-        proj_sum = 0.0
-        for pid in players_id:
-            proj_sum += proj_map.get(pid, 0.0)
-
-        # QB team/opp + count of WR/TE on QB team + bringbacks
-        qb_id = players_id[0]  # QB slot
+        proj_sum = sum(proj_map.get(pid, 0.0) for pid in players_id)
+        # QB stack + bring-back
+        qb_id = players_id[0]
         qb_team = team_map.get(qb_id, None)
         qb_opp  = opp_map.get(qb_id, None)
-        wr_te_on = 0
-        bringbacks = 0
+        wr_te_on = 0; bringbacks = 0
         if qb_team is not None:
             for pid in players_id[1:]:
                 if pos_map.get(pid, "") in ("WR","TE","RB") and team_map.get(pid, None) == qb_team:
@@ -243,38 +226,33 @@ def make_lineup_objects(lineups_df: pd.DataFrame, proj_map: Dict[str,float],
             for pid in players_id[1:]:
                 if team_map.get(pid, None) == qb_opp:
                     bringbacks += 1
-
-        # uniqueness / chalk precompute
-        uq = 0.0
-        ch = 0.0
+        # uniqueness & chalk
+        uq = 0.0; ch = 0.0
         for pid in players_id:
             u = usage.get(pid, 1e-9)
             uq += -math.log(max(1e-9, u))
             ch += u
-
-        objs.append(Lineup(
-            idx=idx,
-            salary=salary,
-            players_id=tuple(players_id),
-            players_txt=tuple(players_txt),
-            proj_sum=proj_sum,
-            qb_team=qb_team,
-            qb_opp=qb_opp,
-            wr_te_on_qb_team=wr_te_on,
-            bringbacks=bringbacks,
-            uniq_logsum=uq,
-            chalk_sum=ch,
-        ))
+        objs.append(Lineup(idx, salary, tuple(players_id), tuple(players_txt), proj_sum,
+                           qb_team, qb_opp, wr_te_on, bringbacks, uq, ch))
     return objs
 
-
 def normalize(values: List[float]) -> List[float]:
-    lo = min(values)
-    hi = max(values)
-    if hi <= lo + 1e-12:
-        return [0.0 for _ in values]
+    lo = min(values); hi = max(values)
+    if hi <= lo + 1e-12: return [0.0]*len(values)
     return [(v - lo) / (hi - lo) for v in values]
 
+def overlap_count(a: Set[str], b: Tuple[str, ...]) -> int:
+    return sum(1 for x in b if x in a)
+
+def passes_caps(lu: Lineup, selected: List[Lineup], counts: Dict[str,int],
+                cap_count: int, max_repeat: int, seen_sets: Set[frozenset]) -> bool:
+    for pid in lu.players_id:
+        if counts.get(pid, 0) + 1 > cap_count: return False
+    lu_set = set(lu.players_id)
+    for ch in selected:
+        if overlap_count(lu_set, ch.players_id) > max_repeat: return False
+    if frozenset(lu.players_id) in seen_sets: return False
+    return True
 
 def greedy_select(lineups: List[Lineup], n_target: int = 150,
                   cap_pct: float = 25.0, max_repeat_init: int = 4,
@@ -282,101 +260,57 @@ def greedy_select(lineups: List[Lineup], n_target: int = 150,
                   w_uniq: float = 0.25, w_chalk: float = 0.05,
                   qb2_bonus: float = 1.0, bring_bonus: float = 0.6,
                   seed: Optional[int] = 42):
-    """
-    Greedy best-first selection with dynamic reweighting:
-    - per-player exposure cap (<= cap_pct of n_target)
-    - max repeating players between any two selected (start at 4; relax if needed)
-    - no exact duplicates
-    Objective blends projection, stack bonuses, uniqueness, and chalk penalty.
-
-    Returns: selected, counts, diagnostics(dict)
-    """
-    if seed is not None:
-        random.seed(seed)
-
+    if seed is not None: random.seed(seed)
     cap_count = int(math.floor((cap_pct/100.0) * n_target + 1e-9))  # e.g., 37 for 150 @ 25%
-    # Base features
     proj_list = [lu.proj_sum for lu in lineups]
     uniq_list = [lu.uniq_logsum for lu in lineups]
     chalk_list = [lu.chalk_sum for lu in lineups]
-
-    proj_norm = normalize(proj_list)
-    uniq_norm = normalize(uniq_list)
-    chalk_norm = normalize(chalk_list)  # higher is chalkier
+    proj_norm = normalize(proj_list); uniq_norm = normalize(uniq_list); chalk_norm = normalize(chalk_list)
 
     def stack_score(lu: Lineup) -> float:
-        return qb2_bonus * (1.0 if lu.wr_te_on_qb_team >= 2 else 0.0) + bring_bonus * (1.0 if lu.bringbacks >= 1 else 0.0)
+        return (qb2_bonus if lu.wr_te_on_qb_team >= 2 else 0.0) + (bring_bonus if lu.bringbacks >= 1 else 0.0)
 
     base_scores = []
     for i, lu in enumerate(lineups):
-        s = (w_proj * proj_norm[i] +
-             w_stack * stack_score(lu) +
-             w_uniq * uniq_norm[i] -
-             w_chalk * chalk_norm[i])
+        s = (w_proj * proj_norm[i] + w_stack * stack_score(lu) + w_uniq * uniq_norm[i] - w_chalk * chalk_norm[i])
         base_scores.append((s, i))
-
-    # Sort candidates by base score desc
     base_scores.sort(key=lambda x: x[0], reverse=True)
-    candidate_idx_order = [i for (_, i) in base_scores]
+    order = [i for _, i in base_scores]
 
     selected: List[Lineup] = []
     counts: Dict[str,int] = {}
-    seen_sets = set()
+    seen_sets: Set[frozenset] = set()
     max_repeat = max_repeat_init
-
-    # To limit rescoring cost, consider a moving window from the top
     window = 5000 if len(lineups) > 6000 else len(lineups)
 
-    # Diagnostics
-    relaxations = 0
-
-    # Loop until we have n_target or exhausted
-    ptr = 0
-    stalled = 0
-    while len(selected) < n_target and ptr < len(candidate_idx_order):
-        batch = candidate_idx_order[ptr: ptr+window]
-        best_i = None
-        best_score = -1e18
-
+    relaxations = 0; ptr = 0; stalled = 0
+    while len(selected) < n_target and ptr < len(order):
+        batch = order[ptr:ptr+window]
+        best_i = None; best_score = -1e18
         for i in batch:
             lu = lineups[i]
-            # hard constraints
-            if not passes_caps(lu, selected, counts, cap_count, max_repeat, seen_sets):
-                continue
-
-            # dynamic penalty for nearing exposure caps (encourage breadth)
+            if not passes_caps(lu, selected, counts, cap_count, max_repeat, seen_sets): continue
+            # dynamic breadth penalty for near-cap players
             pen = 0.0
             for pid in lu.players_id:
-                c = counts.get(pid, 0)
-                u = c / max(1, cap_count)
-                pen += u*u  # quadratic
-            # adjust current score
-            s = base_scores[i][0] - 0.05 * pen  # small penalty weight
-
-            if s > best_score:
-                best_score = s
-                best_i = i
-
+                u = counts.get(pid, 0) / max(1, cap_count)
+                pen += u*u
+            score = base_scores[i][0] - 0.05*pen
+            if score > best_score: best_score = score; best_i = i
         if best_i is not None:
             lu = lineups[best_i]
             selected.append(lu)
-            # update counts & seen set
-            pset = frozenset(lu.players_id)
-            seen_sets.add(pset)
-            for pid in lu.players_id:
-                counts[pid] = counts.get(pid, 0) + 1
+            seen_sets.add(frozenset(lu.players_id))
+            for pid in lu.players_id: counts[pid] = counts.get(pid, 0) + 1
             stalled = 0
         else:
-            # no pick in this window -> relax repeat constraint or move window
             stalled += 1
             if stalled >= 3 and max_repeat < 6:
-                max_repeat += 1
-                relaxations += 1
-                stalled = 0
+                max_repeat += 1; relaxations += 1; stalled = 0
             else:
-                ptr += window  # advance to next slice
+                ptr += window
 
-    diagnostics = {
+    diag = {
         "cap_count": cap_count,
         "max_repeat_start": max_repeat_init,
         "max_repeat_final": max_repeat,
@@ -387,89 +321,93 @@ def greedy_select(lineups: List[Lineup], n_target: int = 150,
         "bringback_count": sum(1 for l in selected if l.bringbacks >= 1),
         "both_qb2_and_bring": sum(1 for l in selected if l.wr_te_on_qb_team >= 2 and l.bringbacks >= 1),
     }
-    return selected, counts, diagnostics
+    return selected, counts, diag
 
+# ------------------- Exports -------------------
 
-def passes_caps(lu: Lineup, selected: List[Lineup], counts: Dict[str,int],
-                cap_count: int, max_repeat: int, seen_sets: set) -> bool:
-    # exposure caps
-    for pid in lu.players_id:
-        if counts.get(pid, 0) + 1 > cap_count:
-            return False
-    # uniqueness: overlap with existing selections
-    lu_set = set(lu.players_id)
-    for ch in selected:
-        if overlap_count(lu_set, ch.players_id) > max_repeat:
-            return False
-    # no exact duplicates
-    if frozenset(lu.players_id) in seen_sets:
-        return False
-    return True
-
-
-def overlap_count(a: set, b: Tuple[str, ...]) -> int:
-    cnt = 0
-    for x in b:
-        if x in a:
-            cnt += 1
-    return cnt
-
-
-# ------------------- Export -------------------
 
 def export_fanduel(template_csv: str, selected: List[Lineup], out_csv: str):
-    """Write selected lineups using the same column order as the template."""
-    tdf = pd.read_csv(template_csv, nrows=0)
-    template_cols = list(tdf.columns)
-    # ensure roster columns exist; if not, fallback to standard roster order
-    cols = [c for c in template_cols if c in ROSTER_COLS]
-    if not cols:
-        cols = ROSTER_COLS[:]
-        template_cols = cols  # only roster cols
+    """
+    Write selected lineups using the exact header order from the FanDuel template.
+    - Preserves duplicate headers (RB, RB, WR, WR, WR) by writing with csv module.
+    - Exports **ID only** (no "Name(id)" text) to satisfy FD parser.
+    - Supports defense column named "D", "DEF", or "DST".
+    """
+    # Read headers exactly as in the template (preserve duplicates)
+    with open(template_csv, "r", newline="") as f:
+        reader = csv.reader(f)
+        try:
+            headers = next(reader)
+        except StopIteration:
+            raise ValueError("FanDuel template appears empty.")
 
-    # Build output rows
+    # Normalized label helper
+    def norm(lbl: str) -> str:
+        return (lbl or "").strip().upper()
+
+    # Prepare output rows for each selected lineup
     rows = []
     for lu in selected:
-        row = {c: "" for c in template_cols}
-        # Map roster
-        mapping = dict(zip(ROSTER_COLS, lu.players_txt))
-        for c in cols:
-            row[c] = mapping.get(c, "")
+        # slot indices in our lineup object (ROSTER_COLS order)
+        # QB=0, RB=1, RB.1=2, WR=3, WR.1=4, WR.2=5, TE=6, FLEX=7, DEF=8
+        rb_i = wr_i = 0  # which RB/WR occurrence we are filling
+        row = [""] * len(headers)
+        for j, h in enumerate(headers):
+            hN = norm(h)
+            if hN == "QB":
+                row[j] = lu.players_id[0]
+            elif hN == "RB":
+                # first RB -> index 1, second RB -> index 2
+                if rb_i == 0:
+                    row[j] = lu.players_id[1]
+                elif rb_i == 1:
+                    row[j] = lu.players_id[2]
+                rb_i += 1
+            elif hN == "WR":
+                # WR occurrences map to indices 3,4,5
+                if wr_i == 0:
+                    row[j] = lu.players_id[3]
+                elif wr_i == 1:
+                    row[j] = lu.players_id[4]
+                elif wr_i == 2:
+                    row[j] = lu.players_id[5]
+                wr_i += 1
+            elif hN == "TE":
+                row[j] = lu.players_id[6]
+            elif hN == "FLEX":
+                row[j] = lu.players_id[7]
+            elif hN in ("D", "DEF", "DST"):
+                row[j] = lu.players_id[8]
+            else:
+                # Non-roster column in template (e.g., "Instructions") --> leave blank
+                row[j] = ""
         rows.append(row)
 
-    out_df = pd.DataFrame(rows, columns=template_cols)
-    out_df.to_csv(out_csv, index=False)
+    # Write CSV with exact headers
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        for row in rows:
+            writer.writerow(row)
 
 
-def export_usage_report(selected: List[Lineup], full_usage: Dict[str,float],
-                        out_csv: str, name_map: Dict[str, Optional[str]],
-                        fallback_names: Dict[str, str]):
-    """Create usage report comparing selected 150 vs full 50k pool, with player names."""
+def export_usage_report(selected: List[Lineup], full_usage: Dict[str,float], out_csv: str,
+                        name_map: Dict[str, Optional[str]], fallback_names: Dict[str, str]):
     from collections import Counter
     sel_cnt = Counter()
     for lu in selected:
-        for pid in lu.players_id:
-            sel_cnt[pid] += 1
-    # Build table
-    recs = []
+        for pid in lu.players_id: sel_cnt[pid] += 1
     n_sel = len(selected)
+    recs = []
     for pid, sel_n in sel_cnt.items():
         sel_pct = sel_n / max(1, n_sel)
         pool_pct = full_usage.get(pid, 0.0)
         name = name_map.get(pid) or fallback_names.get(pid) or ""
-        recs.append({
-            "player_id": pid,
-            "player_name": name,
-            "selected_count": sel_n,
-            "selected_pct": sel_pct,
-            "pool_pct": pool_pct,
-            "delta_pct": sel_pct - pool_pct
-        })
-    rep = pd.DataFrame(recs).sort_values("selected_pct", ascending=False)
-    rep.to_csv(out_csv, index=False)
+        recs.append({"player_id": pid, "player_name": name, "selected_count": sel_n,
+                     "selected_pct": sel_pct, "pool_pct": pool_pct, "delta_pct": sel_pct - pool_pct})
+    pd.DataFrame(recs).sort_values("selected_pct", ascending=False).to_csv(out_csv, index=False)
 
-
-def write_summary(out_path: str, diagnostics: dict, counts: Dict[str,int], n_target: int):
+def write_summary(out_path: str, diagnostics: dict, counts: Dict[str,int], n_target: int, prune_stats: Optional[dict] = None):
     max_exp_ct = max(counts.values()) if counts else 0
     max_exp_pct = (max_exp_ct / max(1, n_target)) * 100.0
     with open(out_path, "w") as f:
@@ -481,23 +419,30 @@ def write_summary(out_path: str, diagnostics: dict, counts: Dict[str,int], n_tar
         f.write(f"Max Exposure Used: {max_exp_ct} ({max_exp_pct:.1f}%)\n")
         f.write(f"Max Repeat: start {diagnostics.get('max_repeat_start')} -> final {diagnostics.get('max_repeat_final')}\n")
         f.write(f"Repeat Relaxations: {diagnostics.get('repeat_relaxations')}\n")
+        if prune_stats:
+            f.write("\nPrune Settings/Stats\n")
+            f.write("---------------------\n")
+            f.write(f"  Min usage cutoff: {prune_stats.get('min_usage_pct', 0):.2f}%\n")
+            f.write(f"  Lineups: {prune_stats.get('n_before',0)} → {prune_stats.get('n_after',0)} (removed {prune_stats.get('removed_lineups',0)})\n")
+            f.write(f"  Players: {prune_stats.get('players_before',0)} → {prune_stats.get('players_after',0)} (removed {prune_stats.get('removed_players',0)})\n")
         f.write("\nStack Distribution (out of selected):\n")
         f.write(f"  QB+2: {diagnostics.get('qb2_count', 0)}\n")
-        f.write(f"  Bring-back >=1: {diagnostics.get('bringback_count', 0)}\n")
+        f.write(f"  Bring-back ≥1: {diagnostics.get('bringback_count', 0)}\n")
         f.write(f"  Both (QB+2 & Bring-back): {diagnostics.get('both_qb2_and_bring', 0)}\n")
 
-
-# ------------------- Main CLI -------------------
+# ------------------- main -------------------
 
 def main():
+    ts = datetime.now().strftime("%Y-%m-%d-%H-%M")
     ap = argparse.ArgumentParser()
     ap.add_argument("--lineups", type=str, help="Path to lineup pool CSV")
     ap.add_argument("--projections", type=str, help="Path to projections CSV")
     ap.add_argument("--template", type=str, help="Path to FanDuel template CSV")
-    ap.add_argument("--out-prefix", type=str, default="mme150")
+    ap.add_argument("--out-prefix", type=str, default=f"mme150-{ts}")
     ap.add_argument("--out-dir", type=str, default="autoMME", help="Output folder (default: autoMME)")
     ap.add_argument("--cap", type=float, default=25.0, help="Max exposure percent per player (default 25)")
     ap.add_argument("--repeat", type=int, default=4, help="Max repeating players between any two selected (start)")
+    ap.add_argument("--min-usage-pct", type=float, default=2.0, help="Prune lineups containing players under this pool-usage percentage (default 2.0)")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -505,8 +450,7 @@ def main():
     proj_csv    = args.projections or pick_file_cli_or_gui("Select PROJECTIONS CSV")
     templ_csv   = args.template or pick_file_cli_or_gui("Select FanDuel TEMPLATE CSV")
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading...")
     ldf = load_lineups(lineups_csv)
@@ -515,23 +459,30 @@ def main():
     print("Building maps...")
     proj_map, pos_map, team_map, opp_map, name_map = build_player_maps(pdf)
 
-    print("Computing pool usage...")
-    usage = compute_pool_usage(ldf)
+    min_usage_frac = max(0.0, float(args.min_usage_pct) / 100.0)
+    print(f"Pruning lineups with players under {args.min_usage_pct:.2f}% pool usage...")
+    ldf_pruned, prune_stats_raw, low_players = prune_by_min_usage(ldf, min_usage_frac)
+    prune_stats = dict(prune_stats_raw)
+    prune_stats["min_usage_pct"] = args.min_usage_pct
+    print(f"  Lineups: {prune_stats_raw['n_before']} → {prune_stats_raw['n_after']} (removed {prune_stats_raw['removed_lineups']})")
+    print(f"  Players: {prune_stats_raw['players_before']} → {prune_stats_raw['players_after']} (removed {prune_stats_raw['removed_players']})")
+
+    print("Computing pool usage (post-prune baseline)...")
+    usage = compute_pool_usage(ldf_pruned)
 
     print("Making lineup objects...")
-    lineup_objs = make_lineup_objects(ldf, proj_map, team_map, opp_map, pos_map, usage)
+    lineup_objs = make_lineup_objects(ldf_pruned, proj_map, team_map, opp_map, pos_map, usage)
 
     print(f"Selecting 150 (cap={args.cap}%, repeat_start={args.repeat})...")
     selected, counts, diagnostics = greedy_select(lineup_objs, n_target=150, cap_pct=args.cap, max_repeat_init=args.repeat, seed=args.seed)
 
-    # Fallback names from lineup texts if missing in projections
-    fallback_names = {}
+    # build fallback names for usage report
+    fallback_names: Dict[str,str] = {}
     for lu in selected:
         for cell_txt, pid in zip(lu.players_txt, lu.players_id):
-            if pid not in name_map or not name_map.get(pid):
+            if not name_map.get(pid):
                 nm = extract_player_name(cell_txt)
-                if nm:
-                    fallback_names[pid] = nm
+                if nm: fallback_names[pid] = nm
 
     out_prefix = Path(args.out_prefix).stem
     out_upload = out_dir / f"{out_prefix}_fanduel_upload.csv"
@@ -545,9 +496,8 @@ def main():
     export_usage_report(selected, usage, str(out_usage), name_map, fallback_names)
 
     print(f"Writing Summary -> {out_summary}")
-    write_summary(str(out_summary), diagnostics, counts, n_target=150)
+    write_summary(str(out_summary), diagnostics, counts, n_target=150, prune_stats=prune_stats)
 
-    # final console summary
     total_proj = diagnostics.get("total_proj", 0.0)
     max_exp_ct = max(counts.values()) if counts else 0
     max_exp_pct = (max_exp_ct / max(1, len(selected))) * 100.0
@@ -556,7 +506,6 @@ def main():
     print(f" - {out_upload}")
     print(f" - {out_usage}")
     print(f" - {out_summary}")
-
 
 if __name__ == "__main__":
     main()
