@@ -46,6 +46,7 @@ try:
         MAX_REPEATING_PLAYERS,
         MIN_SALARY,
         PROGRESSIVE_FACTOR,
+        RANDOM_FACTOR,
         CSV_FILE
     )
 except ImportError:
@@ -53,10 +54,10 @@ except ImportError:
     print("Please copy 'inputs_template.py' to 'inputs.py' and modify the values as needed.")
     sys.exit(1)
 
-# CSV preprocessing function for exact column matching
+# CSV preprocessing function with sanitization
 def preprocess_csv(input_file):
     """
-    Preprocess CSV file with exact column matching for FanDuel NFL format
+    Preprocess CSV file with robust sanitization for FanDuel NFL format
     
     Args:
         input_file (str): Path to input CSV file
@@ -68,9 +69,15 @@ def preprocess_csv(input_file):
     import logging
     
     logger = logging.getLogger(__name__)
-    logger.info(f"Starting CSV preprocessing for: {input_file}")
+    logger.info(f"Starting CSV preprocessing with sanitization for: {input_file}")
     
     try:
+        # Import sanitization functions
+        from sanitization import (
+            sanitize_player_id, sanitize_position, sanitize_salary,
+            sanitize_fppg, sanitize_random, sanitize_name
+        )
+        
         # Read the original CSV
         df = pd.read_csv(input_file)
         logger.info(f"Original CSV shape: {df.shape}")
@@ -84,18 +91,37 @@ def preprocess_csv(input_file):
             logger.error(f"Missing required columns: {missing_columns}")
             raise ValueError(f"Missing required columns: {missing_columns}")
         
-        # Create random values dictionary for strategy
+        # Create processed DataFrame with exact column mapping
+        processed_df = df[required_columns].copy()
+        
+        # Apply sanitization to each column
+        logger.info("Applying sanitization to CSV data...")
+        
+        # Sanitize player IDs
+        processed_df['B_Id'] = processed_df['B_Id'].apply(sanitize_player_id)
+        
+        # Sanitize positions
+        processed_df['B_Position'] = processed_df['B_Position'].apply(sanitize_position)
+        
+        # Sanitize salaries
+        processed_df['B_Salary'] = processed_df['B_Salary'].apply(sanitize_salary)
+        
+        # Sanitize FPPG projections
+        processed_df['A_ppg_projection'] = processed_df['A_ppg_projection'].apply(sanitize_fppg)
+        
+        # Sanitize teams
+        processed_df['B_Team'] = processed_df['B_Team'].apply(sanitize_name)
+        processed_df['B_Opponent'] = processed_df['B_Opponent'].apply(sanitize_name)
+        
+        # Sanitize random values and create dictionary for strategy
         random_values_dict = {}
-        for _, row in df.iterrows():
+        for _, row in processed_df.iterrows():
             player_id = str(row['B_Id'])
-            random_value = row['Random']
+            random_value = sanitize_random(row['Random'])
             if pd.notna(random_value):
                 random_values_dict[player_id] = random_value
         
-        logger.info(f"Created random values dictionary with {len(random_values_dict)} players")
-        
-        # Create processed DataFrame with exact column mapping
-        processed_df = df[required_columns].copy()
+        logger.info(f"Created sanitized random values dictionary with {len(random_values_dict)} players")
         
         # Apply standard column mapping for FanDuel
         standard_mapping = {
@@ -130,9 +156,17 @@ def preprocess_csv(input_file):
         processed_file = 'processed_lineup_data.csv'
         processed_df.to_csv(processed_file, index=False)
         
-        logger.info(f"Processed CSV saved as: {processed_file}")
-        logger.info(f"Processed CSV shape: {processed_df.shape}")
-        logger.info(f"Processed columns: {list(processed_df.columns)}")
+        logger.info(f"Sanitized CSV saved as: {processed_file}")
+        logger.info(f"Sanitized CSV shape: {processed_df.shape}")
+        logger.info(f"Sanitized columns: {list(processed_df.columns)}")
+        
+        # Log sanitization summary
+        logger.info("Sanitization summary:")
+        logger.info(f"  - Player IDs: {len(processed_df['Id'])} entries sanitized")
+        logger.info(f"  - Positions: {processed_df['Position'].nunique()} unique positions standardized")
+        logger.info(f"  - Salaries: {len(processed_df['Salary'])} entries converted to integers")
+        logger.info(f"  - FPPG: {len(processed_df['FPPG'])} entries converted to floats")
+        logger.info(f"  - Random values: {len(random_values_dict)} entries converted to 0-1 range")
         
         return processed_file, random_values_dict
         
@@ -182,7 +216,7 @@ class RandomFantasyPointsStrategy(BaseFantasyPointsStrategy):
         Initialize strategy with random values dictionary
         
         Args:
-            random_values_dict (dict): Dictionary mapping player IDs to random percentage values
+            random_values_dict (dict): Dictionary mapping player IDs to random decimal values (0-1 range)
         """
         self.random_values_dict = random_values_dict
     
@@ -199,19 +233,11 @@ class RandomFantasyPointsStrategy(BaseFantasyPointsStrategy):
         player_id = str(player.id)
         
         if player_id in self.random_values_dict:
-            random_percentage = self.random_values_dict[player_id]
-            
-            # Handle both string percentages (e.g., "7.50%") and float values
-            if isinstance(random_percentage, str):
-                # Convert percentage string to decimal (e.g., "7.50%" -> 0.075)
-                random_decimal = float(random_percentage.strip('%')) / 100.0
-            else:
-                # Already a float value, use as decimal directly
-                random_decimal = float(random_percentage) / 100.0
+            random_decimal = self.random_values_dict[player_id]
             
             # Calculate deviations: min = half of random, max = 2x random
-            min_deviation = random_decimal / 3.0
-            max_deviation = random_decimal * 3.0
+            min_deviation = random_decimal / RANDOM_FACTOR
+            max_deviation = random_decimal * RANDOM_FACTOR
             
             # Apply random deviation to player's FPPG
             import random
