@@ -121,10 +121,9 @@ def preprocess_csv(input_file):
         # Add required columns for FanDuel NFL
         processed_df['Injury Indicator'] = ''  # Empty injury indicator
         processed_df['Game'] = ''  # Empty game info
-        processed_df['Roster Position'] = processed_df['Position']
         
         # Reorder columns to match FanDuel expected format
-        fanduel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator', 'Roster Position']
+        fanduel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
         processed_df = processed_df[fanduel_columns]
         
         # Save processed CSV
