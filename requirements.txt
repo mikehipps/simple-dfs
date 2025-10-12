@@ -1,4 +1,0 @@
-PuLP==2.4
-pytz
-parameterized
-mip==1.13.0
