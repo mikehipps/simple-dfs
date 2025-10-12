@@ -1,18 +1,47 @@
-*.csv
+# Python cache files
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Log files
+*.log
+logs/
+
+# Generated lineup files
+lineups/*.csv
+*.csv
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary files
+.~lock.*#
+
+# Build and distribution files
 .cache
 .coverage
 .coverage.*
-.idea
 .tox
 .mypy_cache
 .eggs
-csv_examples
-dist
-htmlcov
-pydfs_lineup_optimizer.egg-info
+dist/
+build/
+pydfs_lineup_optimizer.egg-info/
 MANIFEST
-docs/_build
-.eggs
-venv
-env
+htmlcov/
+csv_examples/
+
+# Documentation build files
+docs/_build/
