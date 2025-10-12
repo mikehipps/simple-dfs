@@ -77,7 +77,7 @@ def preprocess_csv(input_file):
         logger.info(f"Original columns: {list(df.columns)}")
         
         # Check for required columns with exact matching
-        required_columns = ['B_Id', 'B_Position', 'B_Nickname', 'B_Salary', 'A_ppg_projection', 'B_Opponent', 'Random']
+        required_columns = ['B_Id', 'B_Position', 'B_Nickname', 'B_Salary', 'A_ppg_projection', 'B_Team', 'B_Opponent', 'Random']
         missing_columns = [col for col in required_columns if col not in df.columns]
         
         if missing_columns:
@@ -104,7 +104,8 @@ def preprocess_csv(input_file):
             'B_Nickname': 'Nickname',
             'B_Salary': 'Salary',
             'A_ppg_projection': 'FPPG',
-            'B_Opponent': 'Team'
+            'B_Team': 'Team',
+            'B_Opponent': 'Opponent'
         }
         
         processed_df = processed_df.rename(columns=standard_mapping)
@@ -123,7 +124,7 @@ def preprocess_csv(input_file):
         processed_df['Roster Position'] = processed_df['Position']
         
         # Reorder columns to match FanDuel expected format
-        fanduel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Salary', 'Injury Indicator', 'Roster Position']
+        fanduel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator', 'Roster Position']
         processed_df = processed_df[fanduel_columns]
         
         # Save processed CSV
@@ -205,8 +206,8 @@ class RandomFantasyPointsStrategy(BaseFantasyPointsStrategy):
             random_decimal = float(random_percentage.strip('%')) / 100.0
             
             # Calculate deviations: min = half of random, max = 2x random
-            min_deviation = random_decimal / 2.0
-            max_deviation = random_decimal * 2.0
+            min_deviation = random_decimal / 3.0
+            max_deviation = random_decimal * 3.0
             
             # Apply random deviation to player's FPPG
             import random
