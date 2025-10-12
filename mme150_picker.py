@@ -459,6 +459,15 @@ def main():
     print("Building maps...")
     proj_map, pos_map, team_map, opp_map, name_map = build_player_maps(pdf)
 
+    # Hard-exclude scratched players (proj <= 0)
+    zero_ids = {pid for pid, p in proj_map.items() if p <= 0}
+    if zero_ids:
+        bad_mask = ldf[ROSTER_COLS].applymap(extract_player_id).isin(zero_ids).any(axis=1)
+        removed = int(bad_mask.sum())
+        ldf = ldf[~bad_mask].reset_index(drop=True)
+        print(f"Removed {removed} lineups due to zero-projection players ({len(zero_ids)} IDs).")
+
+
     min_usage_frac = max(0.0, float(args.min_usage_pct) / 100.0)
     print(f"Pruning lineups with players under {args.min_usage_pct:.2f}% pool usage...")
     ldf_pruned, prune_stats_raw, low_players = prune_by_min_usage(ldf, min_usage_frac)
