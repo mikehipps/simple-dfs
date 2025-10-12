@@ -202,8 +202,13 @@ class RandomFantasyPointsStrategy(BaseFantasyPointsStrategy):
         if player_id in self.random_values_dict:
             random_percentage = self.random_values_dict[player_id]
             
-            # Convert percentage string (e.g., "7.50%") to decimal (0.075)
-            random_decimal = float(random_percentage.strip('%')) / 100.0
+            # Handle both string percentages (e.g., "7.50%") and float values
+            if isinstance(random_percentage, str):
+                # Convert percentage string to decimal (e.g., "7.50%" -> 0.075)
+                random_decimal = float(random_percentage.strip('%')) / 100.0
+            else:
+                # Already a float value, use as decimal directly
+                random_decimal = float(random_percentage) / 100.0
             
             # Calculate deviations: min = half of random, max = 2x random
             min_deviation = random_decimal / 3.0
