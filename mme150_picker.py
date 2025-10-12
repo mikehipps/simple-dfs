@@ -255,9 +255,9 @@ def passes_caps(lu: Lineup, selected: List[Lineup], counts: Dict[str,int],
     return True
 
 def greedy_select(lineups: List[Lineup], n_target: int = 150,
-                  cap_pct: float = 25.0, max_repeat_init: int = 4,
+                  cap_pct: float = 20.0, max_repeat_init: int = 4,
                   w_proj: float = 0.55, w_stack: float = 0.15,
-                  w_uniq: float = 0.25, w_chalk: float = 0.05,
+                  w_uniq: float = 0.30, w_chalk: float = 0.05,
                   qb2_bonus: float = 1.0, bring_bonus: float = 0.6,
                   seed: Optional[int] = 42):
     if seed is not None: random.seed(seed)
@@ -440,7 +440,7 @@ def main():
     ap.add_argument("--template", type=str, help="Path to FanDuel template CSV")
     ap.add_argument("--out-prefix", type=str, default=f"mme150-{ts}")
     ap.add_argument("--out-dir", type=str, default="autoMME", help="Output folder (default: autoMME)")
-    ap.add_argument("--cap", type=float, default=25.0, help="Max exposure percent per player (default 25)")
+    ap.add_argument("--cap", type=float, default=20.0, help="Max exposure percent per player (default 25)")
     ap.add_argument("--repeat", type=int, default=4, help="Max repeating players between any two selected (start)")
     ap.add_argument("--min-usage-pct", type=float, default=2.0, help="Prune lineups containing players under this pool-usage percentage (default 2.0)")
     ap.add_argument("--seed", type=int, default=42)
