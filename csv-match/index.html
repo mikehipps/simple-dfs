@@ -149,18 +149,19 @@
 </fieldset>
 
 <fieldset>
-  <legend>3) Columns to keep</legend>
-  <div class="row">
-    <div class="col">
-      <div><b>Keep from File A</b></div>
-      <div id="keepA" class="box small"></div>
-      <label>Prefix for A-kept columns: <input id="prefA" type="text" value="A_" /></label>
-    </div>
-    <div class="col">
-      <div><b>Keep from File B</b></div>
-      <div id="keepB" class="box small"></div>
-      <label>Prefix for B-kept columns: <input id="prefB" type="text" value="B_" /></label>
-    </div>
+  <legend>3) Column mapping</legend>
+  
+  <!-- Required columns section -->
+  <div style="margin-bottom: 20px;">
+    <div><b>Required columns</b> <span class="small muted">(must be mapped)</span></div>
+    <div id="requiredMapping" class="box small" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center;"></div>
+  </div>
+  
+  <!-- Optional columns section -->
+  <div>
+    <div><b>Optional columns</b> <span class="small muted">(will appear in output even if empty)</span></div>
+    <div id="optionalMapping" class="box small"></div>
+    <button type="button" id="addOptionalColumn" style="margin-top: 8px;">+ Add optional column</button>
   </div>
 </fieldset>
 
@@ -423,11 +424,19 @@ function download(filename, text) {
 function getAliases() { try { return JSON.parse(localStorage.getItem("csvMatchAliases") || "{}"); } catch { return {}; } }
 function setAliases(obj) { localStorage.setItem("csvMatchAliases", JSON.stringify(obj)); }
 
+// ---------- configuration ----------
+const REQUIRED_COLUMNS = {
+  nfl: ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
+};
+
+const OPTIONAL_COLUMNS = ['random', 'exposure', 'ceiling', 'floor', 'ownership', 'value', 'proj_pts', 'proj_own'];
+
 // ---------- state ----------
 let A = null, B = null;
 let headersA = [], headersB = [];
 let mergedStore = null, manifest = null;
 let reviewItems = [];
+let columnMapping = { required: {}, optional: {} };
 
 // ---------- UI refs ----------
 const themeToggle = document.getElementById("themeToggle");
@@ -450,10 +459,9 @@ const nameACompose = document.getElementById("nameACompose");
 const nameBCompose = document.getElementById("nameBCompose");
 const nameASeparator = document.getElementById("nameASeparator");
 const nameBSeparator = document.getElementById("nameBSeparator");
-const keepA = document.getElementById("keepA");
-const keepB = document.getElementById("keepB");
-const prefA = document.getElementById("prefA");
-const prefB = document.getElementById("prefB");
+const requiredMapping = document.getElementById("requiredMapping");
+const optionalMapping = document.getElementById("optionalMapping");
+const addOptionalColumn = document.getElementById("addOptionalColumn");
 const btnMerge = document.getElementById("btnMerge");
 const btnExportCSV = document.getElementById("btnExportCSV");
 const btnExportManifest = document.getElementById("btnExportManifest");
@@ -495,15 +503,124 @@ function fillMultiSelect(sel, headers) {
     const o=document.createElement("option"); o.value=h; o.textContent=h; sel.appendChild(o);
   });
 }
-function fillKeep(box, headers) {
-  box.innerHTML = "";
-  headers.forEach(h => {
-    const lbl = document.createElement("label");
-    lbl.style.display = "inline-block";
-    lbl.style.marginRight = "10px";
-    lbl.innerHTML = `<input type="checkbox" data-col="${h}" checked> <span class="code">${h}</span>`;
-    box.appendChild(lbl);
+function fillRequiredMapping(headers) {
+  requiredMapping.innerHTML = "";
+  const sport = sportSelect.value;
+  const requiredCols = REQUIRED_COLUMNS[sport] || [];
+  
+  requiredCols.forEach(colName => {
+    const label = document.createElement("label");
+    label.textContent = `*${colName}:`;
+    label.style.fontWeight = "600";
+    
+    const select = document.createElement("select");
+    select.dataset.column = colName;
+    
+    // Add empty option
+    const emptyOpt = document.createElement("option");
+    emptyOpt.value = "";
+    emptyOpt.textContent = "— choose —";
+    select.appendChild(emptyOpt);
+    
+    // Add header options
+    headers.forEach(h => {
+      const opt = document.createElement("option");
+      opt.value = h;
+      opt.textContent = h;
+      select.appendChild(opt);
+    });
+    
+    select.addEventListener("change", () => {
+      columnMapping.required[colName] = select.value;
+    });
+    
+    requiredMapping.appendChild(label);
+    requiredMapping.appendChild(select);
   });
+}
+
+function addOptionalDropdown() {
+  const container = document.createElement("div");
+  container.style.display = "flex";
+  container.style.gap = "8px";
+  container.style.alignItems = "center";
+  container.style.marginBottom = "8px";
+  
+  // Output name dropdown
+  const outputSelect = document.createElement("select");
+  outputSelect.style.flex = "1";
+  
+  const emptyOpt = document.createElement("option");
+  emptyOpt.value = "";
+  emptyOpt.textContent = "— choose output —";
+  outputSelect.appendChild(emptyOpt);
+  
+  OPTIONAL_COLUMNS.forEach(col => {
+    const opt = document.createElement("option");
+    opt.value = col;
+    opt.textContent = col;
+    outputSelect.appendChild(opt);
+  });
+  
+  // Source column dropdown
+  const sourceSelect = document.createElement("select");
+  sourceSelect.style.flex = "1";
+  
+  const sourceEmptyOpt = document.createElement("option");
+  sourceEmptyOpt.value = "";
+  sourceEmptyOpt.textContent = "— choose source —";
+  sourceSelect.appendChild(sourceEmptyOpt);
+  
+  const allHeaders = [...headersA, ...headersB];
+  allHeaders.forEach(h => {
+    const opt = document.createElement("option");
+    opt.value = h;
+    opt.textContent = h;
+    sourceSelect.appendChild(opt);
+  });
+  
+  // Remove button
+  const removeBtn = document.createElement("button");
+  removeBtn.textContent = "×";
+  removeBtn.type = "button";
+  removeBtn.style.padding = "2px 6px";
+  removeBtn.addEventListener("click", () => {
+    container.remove();
+    // Remove from mapping
+    if (outputSelect.value) {
+      delete columnMapping.optional[outputSelect.value];
+    }
+  });
+  
+  // Event listeners
+  outputSelect.addEventListener("change", () => {
+    if (outputSelect.value && sourceSelect.value) {
+      columnMapping.optional[outputSelect.value] = sourceSelect.value;
+    }
+  });
+  
+  sourceSelect.addEventListener("change", () => {
+    if (outputSelect.value && sourceSelect.value) {
+      columnMapping.optional[outputSelect.value] = sourceSelect.value;
+    }
+  });
+  
+  container.appendChild(outputSelect);
+  container.appendChild(sourceSelect);
+  container.appendChild(removeBtn);
+  optionalMapping.appendChild(container);
+}
+
+function validateRequiredMapping() {
+  const sport = sportSelect.value;
+  const requiredCols = REQUIRED_COLUMNS[sport] || [];
+  
+  for (const col of requiredCols) {
+    if (!columnMapping.required[col]) {
+      return `Required column "${col}" is not mapped`;
+    }
+  }
+  return null;
 }
 function parseCSV(file, cb) {
   Papa.parse(file, { header: true, skipEmptyLines: true, complete: r => cb(null, r), error: e => cb(e, null) });
@@ -531,7 +648,7 @@ fileA.addEventListener("change", e => {
     metaA.textContent = `${f.name} — ${A.length} rows, ${headersA.length} columns`;
     fillSelect(nameA, headersA); fillSelect(teamA, headersA);
     fillMultiSelect(nameACompose, headersA);
-    fillKeep(keepA, headersA);
+    fillRequiredMapping([...headersA, ...headersB]);
   });
 });
 fileB.addEventListener("change", e => {
@@ -542,7 +659,7 @@ fileB.addEventListener("change", e => {
     metaB.textContent = `${f.name} — ${B.length} rows, ${headersB.length} columns`;
     fillSelect(nameB, headersB); fillSelect(teamB, headersB);
     fillMultiSelect(nameBCompose, headersB);
-    fillKeep(keepB, headersB);
+    fillRequiredMapping([...headersA, ...headersB]);
   });
 });
 
@@ -588,12 +705,18 @@ function buildIndex(rows, getName, teamCol) {
   return { items, map, fuseByTeam };
 }
 
-function gatherKeep(box) {
-  return [...box.querySelectorAll('input[type="checkbox"]:checked')].map(i => i.dataset.col);
-}
+// Remove old gatherKeep function - no longer needed
 
 document.getElementById("btnMerge").addEventListener("click", () => {
   if (!A || !B) { status.textContent = "Upload both files first."; return; }
+  
+  // Validate required columns
+  const validationError = validateRequiredMapping();
+  if (validationError) {
+    status.textContent = validationError;
+    return;
+  }
+
   const primary = [...document.querySelectorAll('input[name="primary"]')].find(r => r.checked)?.value || "A";
 
   const getNameA = buildNameGetter(nameModeA.value, nameA, nameACompose, nameASeparator.value);
@@ -609,11 +732,6 @@ document.getElementById("btnMerge").addEventListener("click", () => {
   if (!teamP || !teamS || teamP.startsWith("—") || teamS.startsWith("—")) {
     status.textContent = "Pick Team columns for both files."; return;
   }
-
-  const keepColsA = gatherKeep(keepA);
-  const keepColsB = gatherKeep(keepB);
-  const prefixA = prefA.value || "A_";
-  const prefixB = prefB.value || "B_";
 
   status.textContent = "Matching...";
   const Sidx = buildIndex(S, nameGetterS, teamS);
@@ -659,12 +777,39 @@ document.getElementById("btnMerge").addEventListener("click", () => {
     }
 
     const out = {};
-    if (primary==="A") { keepColsA.forEach(c => out[(prefixA + c)] = pr[c]); }
-    else { keepColsB.forEach(c => out[(prefixB + c)] = pr[c]); }
-    if (match) {
-      if (primary==="A") { keepColsB.forEach(c => out[(prefixB + c)] = match[c]); }
-      else { keepColsA.forEach(c => out[(prefixA + c)] = match[c]); }
-    }
+    
+    // Map required columns
+    const sport = sportSelect.value;
+    const requiredCols = REQUIRED_COLUMNS[sport] || [];
+    requiredCols.forEach(colName => {
+      const sourceCol = columnMapping.required[colName];
+      if (sourceCol) {
+        // Try to find the value from primary or secondary file
+        let value = pr[sourceCol];
+        if (value === undefined && match) {
+          value = match[sourceCol];
+        }
+        out[colName] = value || "";
+      } else {
+        out[colName] = "";
+      }
+    });
+    
+    // Map optional columns
+    OPTIONAL_COLUMNS.forEach(colName => {
+      const sourceCol = columnMapping.optional[colName];
+      if (sourceCol) {
+        // Try to find the value from primary or secondary file
+        let value = pr[sourceCol];
+        if (value === undefined && match) {
+          value = match[sourceCol];
+        }
+        out[colName] = value || "";
+      } else {
+        out[colName] = "";
+      }
+    });
+    
     out["_match_reason"] = match ? reason : (reason || "missing");
     merged.push(out);
   }
@@ -737,6 +882,11 @@ sportSelect.addEventListener("change", () => {
   loadDataSeeds(sportSelect.value);
 });
 loadDataSeeds(sportSelect.value);
+
+// Add event listener for optional column button
+if (addOptionalColumn) {
+  addOptionalColumn.addEventListener("click", addOptionalDropdown);
+}
 </script>
 </body>
 </html>
