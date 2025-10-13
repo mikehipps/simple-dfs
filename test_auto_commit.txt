@@ -1,2 +1,0 @@
-# Test file for auto-commit verification
-# Additional test content
