@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env ./venv/bin/python3
 """
 Auto-commit utility for code subtasks
 Automatically stages and commits changes with descriptive messages
