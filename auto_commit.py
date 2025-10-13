@@ -55,13 +55,23 @@ class AutoCommit:
         return self.run_command(['git', 'rev-parse', '--git-dir'])
     
     def has_changes(self) -> bool:
-        """Check if there are any changes to commit"""
+        """Check if there are any changes to commit (including untracked files)"""
         try:
+            # Check for changes to tracked files
             result = subprocess.run(
                 ['git', 'diff-index', '--quiet', 'HEAD', '--'],
                 capture_output=True
             )
-            return result.returncode != 0
+            has_tracked_changes = result.returncode != 0
+            
+            # Check for untracked files
+            result = subprocess.run(
+                ['git', 'ls-files', '--others', '--exclude-standard'],
+                capture_output=True, text=True
+            )
+            has_untracked_files = bool(result.stdout.strip())
+            
+            return has_tracked_changes or has_untracked_files
         except Exception:
             return False
     

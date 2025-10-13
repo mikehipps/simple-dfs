@@ -37,8 +37,8 @@ fi
 CURRENT_BRANCH=$(git branch --show-current)
 print_status "Current branch: $CURRENT_BRANCH"
 
-# Check for changes
-if git diff-index --quiet HEAD --; then
+# Check for changes (including untracked files)
+if git diff-index --quiet HEAD -- && [ -z "$(git ls-files --others --exclude-standard)" ]; then
     print_warning "No changes to commit"
     exit 0
 fi
