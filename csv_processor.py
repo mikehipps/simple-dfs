@@ -3,13 +3,16 @@
 CSV Processor Module for NFL Lineup Generator
 
 This module handles all CSV processing, sanitization, and format conversion
-for the NFL lineup generator. It provides robust preprocessing functions
-that handle various CSV input formats and ensure compatibility with
-pydfs-lineup-optimizer's expected formats.
+for the NFL lineup generator. It expects standardized column names from the
+CSV Match tool and ensures compatibility with pydfs-lineup-optimizer's
+expected FanDuel NFL format.
+
+Standardized Column Names:
+- Id, Position, First Name, Last Name, FPPG, Game, Team, Opponent, Salary, Injury Indicator
 
 Key Features:
 - CSV file reading and validation
-- Column mapping and standardization
+- Standardized column processing
 - Integration with sanitization functions
 - FanDuel NFL format conversion
 - Error handling and logging
@@ -32,6 +35,9 @@ def preprocess_csv(input_file: str) -> Tuple[str, Dict[str, float]]:
     """
     Preprocess CSV file with robust sanitization for FanDuel NFL format
     
+    Expects standardized column names from CSV Match tool:
+    ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
+    
     Args:
         input_file (str): Path to input CSV file
         
@@ -51,28 +57,25 @@ def preprocess_csv(input_file: str) -> Tuple[str, Dict[str, float]]:
         logger.info(f"Original CSV shape: {df.shape}")
         logger.info(f"Original columns: {list(df.columns)}")
         
-        # Check for required columns with exact matching
-        required_columns = ['B_Id', 'B_Position', 'B_Nickname', 'B_Salary', 'A_ppg_projection', 'B_Team', 'B_Opponent', 'Random']
+        # Check for required columns with standardized names
+        required_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
         missing_columns = [col for col in required_columns if col not in df.columns]
         
-        # Check if B_Game or B_B_Game column exists for game info preservation
-        has_game_info = 'B_Game' in df.columns or 'B_B_Game' in df.columns
-        game_column = 'B_Game' if 'B_Game' in df.columns else 'B_B_Game' if 'B_B_Game' in df.columns else None
-        
+        # Check if Game column exists for game info preservation
+        has_game_info = 'Game' in df.columns
         if has_game_info:
-            logger.info(f"Found {game_column} column - will preserve game information for D/ST constraints")
+            logger.info("Found Game column - will preserve game information for D/ST constraints")
         else:
-            logger.warning("B_Game/B_B_Game column not found - game information will be empty")
+            logger.warning("Game column not found - game information will be empty")
         
         if missing_columns:
             logger.error(f"Missing required columns: {missing_columns}")
             raise ValueError(f"Missing required columns: {missing_columns}")
         
-        # Create processed DataFrame with exact column mapping
-        # Include game column if available for preservation
+        # Create processed DataFrame with standardized columns
         columns_to_copy = required_columns.copy()
-        if has_game_info and game_column:
-            columns_to_copy.append(game_column)
+        if has_game_info:
+            columns_to_copy.append('Game')
         
         processed_df = df[columns_to_copy].copy()
         
@@ -80,68 +83,43 @@ def preprocess_csv(input_file: str) -> Tuple[str, Dict[str, float]]:
         logger.info("Applying sanitization to CSV data...")
         
         # Sanitize player IDs
-        processed_df['B_Id'] = processed_df['B_Id'].apply(sanitize_player_id)
+        processed_df['Id'] = processed_df['Id'].apply(sanitize_player_id)
         
         # Sanitize positions
-        processed_df['B_Position'] = processed_df['B_Position'].apply(sanitize_position)
+        processed_df['Position'] = processed_df['Position'].apply(sanitize_position)
         
         # Sanitize salaries
-        processed_df['B_Salary'] = processed_df['B_Salary'].apply(sanitize_salary)
+        processed_df['Salary'] = processed_df['Salary'].apply(sanitize_salary)
         
         # Sanitize FPPG projections
-        processed_df['A_ppg_projection'] = processed_df['A_ppg_projection'].apply(sanitize_fppg)
+        processed_df['FPPG'] = processed_df['FPPG'].apply(sanitize_fppg)
         
         # Sanitize teams
-        processed_df['B_Team'] = processed_df['B_Team'].apply(sanitize_name)
-        processed_df['B_Opponent'] = processed_df['B_Opponent'].apply(sanitize_name)
+        processed_df['Team'] = processed_df['Team'].apply(sanitize_name)
+        processed_df['Opponent'] = processed_df['Opponent'].apply(sanitize_name)
         
-        # Sanitize random values and create dictionary for strategy
+        # Sanitize names
+        processed_df['First Name'] = processed_df['First Name'].apply(sanitize_name)
+        processed_df['Last Name'] = processed_df['Last Name'].apply(sanitize_name)
+        
+        # Check for Random column and create dictionary for strategy
         random_values_dict = {}
-        for _, row in processed_df.iterrows():
-            player_id = str(row['B_Id'])
-            random_value = sanitize_random(row['Random'])
-            if pd.notna(random_value):
-                random_values_dict[player_id] = random_value
-        
-        logger.info(f"Created sanitized random values dictionary with {len(random_values_dict)} players")
-        
-        # Apply standard column mapping for FanDuel
-        standard_mapping = {
-            'B_Id': 'Id',
-            'B_Position': 'Position',
-            'B_Nickname': 'Nickname',
-            'B_Salary': 'Salary',
-            'A_ppg_projection': 'FPPG',
-            'B_Team': 'Team',
-            'B_Opponent': 'Opponent'
-        }
-        
-        # Add game column mapping if available
-        if has_game_info and game_column:
-            standard_mapping[game_column] = 'Game'
-        
-        processed_df = processed_df.rename(columns=standard_mapping)
-        
-        # Split nickname into First Name and Last Name for FanDuel format
-        processed_df['First Name'] = processed_df['Nickname'].apply(
-            lambda x: x.split()[0] if pd.notna(x) else ''
-        )
-        processed_df['Last Name'] = processed_df['Nickname'].apply(
-            lambda x: ' '.join(x.split()[1:]) if pd.notna(x) and len(x.split()) > 1 else ''
-        )
-        
-        # Add required columns for FanDuel NFL
-        processed_df['Injury Indicator'] = ''  # Empty injury indicator
-        
-        # Game information is now preserved through column mapping
-        if has_game_info and game_column:
-            logger.info(f"Preserved game information from {game_column} column")
+        if 'Random' in df.columns:
+            for _, row in df.iterrows():
+                player_id = str(row['Id'])
+                random_value = sanitize_random(row['Random'])
+                if pd.notna(random_value):
+                    random_values_dict[player_id] = random_value
+            logger.info(f"Created sanitized random values dictionary with {len(random_values_dict)} players")
         else:
-            # Add empty Game column if no game info available
+            logger.info("No Random column found - skipping random values processing")
+        
+        # Add empty Game column if no game info available
+        if not has_game_info:
             processed_df['Game'] = ''
             logger.warning("No game information available - using empty strings")
         
-        # Reorder columns to match FanDuel expected format
+        # Ensure all required columns are present in the correct order
         fanduel_columns = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
         processed_df = processed_df[fanduel_columns]
         
