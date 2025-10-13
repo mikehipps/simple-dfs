@@ -1,0 +1,12 @@
+# Core dependencies for simple-dfs project
+pandas>=1.5.0
+pulp>=2.7.0
+
+# Additional dependencies for data analysis and processing
+numpy>=1.21.0
+
+# Note: pydfs-lineup-optimizer is installed separately from local clone
+# Run these commands after installing the above dependencies:
+# cd pydfs-lineup-optimizer
+# pip install -e .
+# cd ..
