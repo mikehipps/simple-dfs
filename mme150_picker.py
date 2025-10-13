@@ -56,67 +56,84 @@ def pick_file_cli_or_gui(title: str) -> str:
 # ------------------- Projections detection -------------------
 
 def detect_columns(df: pd.DataFrame) -> Tuple[str, str, str, Optional[str], Optional[str]]:
-    """Return (id_col, proj_col, pos_col, team_col?, name_col?)."""
-    # ID
-    id_col = None
-    for c in ["B_Id","Id","PlayerId","Player_ID","PLAYER_ID","id"]:
-        if c in df.columns: id_col = c; break
+    """Return (id_col, proj_col, pos_col, team_col?, name_col?) using standardized column names."""
+    # Required columns from csv-match system
+    REQUIRED_COLUMNS = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
+    
+    # ID column - use standardized 'Id'
+    id_col = "Id" if "Id" in df.columns else None
     if id_col is None:
-        cands = [c for c in df.columns if "id" in c.lower()]
-        id_col = min(cands, key=len) if cands else df.columns[0]
-    # Projection
-    proj_col = "A_ppg_projection" if "A_ppg_projection" in df.columns else None
+        # Fallback to common variations
+        for c in ["PlayerId","Player_ID","PLAYER_ID","id"]:
+            if c in df.columns: id_col = c; break
+    if id_col is None:
+        raise ValueError("Could not detect ID column in projections CSV. Expected 'Id' or similar.")
+    
+    # Projection column - use standardized 'FPPG'
+    proj_col = "FPPG" if "FPPG" in df.columns else None
     if proj_col is None:
+        # Fallback to common variations
         for c in df.columns:
             cl = c.lower()
             if "proj" in cl or cl in ("fppg","points","projection","ppg"):
                 proj_col = c; break
     if proj_col is None:
-        raise ValueError("Could not detect projection column in projections CSV.")
-    # Position
-    pos_col = None
-    for c in ["B_Position","Position","POS","Pos"]:
-        if c in df.columns: pos_col = c; break
+        raise ValueError("Could not detect projection column in projections CSV. Expected 'FPPG' or similar.")
+    
+    # Position column - use standardized 'Position'
+    pos_col = "Position" if "Position" in df.columns else None
     if pos_col is None:
-        cands = [c for c in df.columns if "pos" in c.lower() or "position" in c.lower()]
-        pos_col = cands[0] if cands else None
+        # Fallback to common variations
+        for c in ["POS","Pos"]:
+            if c in df.columns: pos_col = c; break
     if pos_col is None:
-        raise ValueError("Could not detect position column in projections CSV.")
-    # Team (optional)
-    team_col = None
-    for c in ["B_Team","Team","TEAM","Tm","team"]:
-        if c in df.columns: team_col = c; break
+        raise ValueError("Could not detect position column in projections CSV. Expected 'Position' or similar.")
+    
+    # Team column (optional) - use standardized 'Team'
+    team_col = "Team" if "Team" in df.columns else None
     if team_col is None:
-        cands = [c for c in df.columns if "team" in c.lower() and "opp" not in c.lower()]
-        team_col = cands[0] if cands else None
-    # Name (optional)
+        # Fallback to common variations
+        for c in ["TEAM","Tm","team"]:
+            if c in df.columns: team_col = c; break
+    
+    # Name column (optional) - use standardized 'First Name' + 'Last Name' or fallback
     name_col = None
-    for c in ["B_Nickname","Nickname","Player","Name","PLAYER","PLAYER_NAME","FullName"]:
-        if c in df.columns: name_col = c; break
+    # Check if we have both first and last name columns
+    if "First Name" in df.columns and "Last Name" in df.columns:
+        name_col = "First Name"  # We'll handle composition separately
+    else:
+        # Fallback to single name column
+        for c in ["Player","Name","PLAYER","PLAYER_NAME","FullName"]:
+            if c in df.columns: name_col = c; break
+    
     return id_col, proj_col, pos_col, team_col, name_col
 
 def load_projections(proj_csv: str) -> Tuple[pd.DataFrame, str, str, str, Optional[str], Optional[str]]:
     df = pd.read_csv(proj_csv)
     id_col, proj_col, pos_col, team_col, name_col = detect_columns(df)
-    # Opponent (optional)
-    opp_col = None
-    for c in ["B_Opponent","Opponent","Opp","OPP","opp"]:
-        if c in df.columns: opp_col = c; break
+    # Opponent (optional) - use standardized 'Opponent'
+    opp_col = "Opponent" if "Opponent" in df.columns else None
     if opp_col is None:
-        cands = [c for c in df.columns if "opp" in c.lower()]
-        opp_col = cands[0] if cands else None
-    # Rename to standardized columns
-    ren = {id_col:"B_Id", proj_col:"A_ppg_projection", pos_col:"B_Position"}
-    if team_col: ren[team_col] = "B_Team"
-    if opp_col:  ren[opp_col]  = "B_Opponent"
-    if name_col: ren[name_col] = "B_Name"
-    std = df.rename(columns=ren)
-    keep = ["B_Id","A_ppg_projection","B_Position"]
-    if "B_Team" in std.columns: keep.append("B_Team")
-    if "B_Opponent" in std.columns: keep.append("B_Opponent")
-    if "B_Name" in std.columns: keep.append("B_Name")
-    std = std[keep].copy()
-    return std, "B_Id", "A_ppg_projection", "B_Position", ("B_Team" if "B_Team" in std.columns else None), ("B_Name" if "B_Name" in std.columns else None)
+        # Fallback to common variations
+        for c in ["Opp","OPP","opp"]:
+            if c in df.columns: opp_col = c; break
+    
+    # Use standardized column names directly - no renaming needed
+    # Build list of columns to keep
+    keep = [id_col, proj_col, pos_col]
+    if team_col: keep.append(team_col)
+    if opp_col: keep.append(opp_col)
+    if name_col: keep.append(name_col)
+    
+    # Handle name composition if we have separate first/last name columns
+    if name_col == "First Name" and "Last Name" in df.columns:
+        # Create a combined name column
+        df["Name"] = df["First Name"].astype(str) + " " + df["Last Name"].astype(str)
+        keep.append("Name")
+        name_col = "Name"
+    
+    std = df[keep].copy()
+    return std, id_col, proj_col, pos_col, (team_col if team_col in std.columns else None), (name_col if name_col in std.columns else None)
 
 def load_lineups(lineups_csv: str) -> pd.DataFrame:
     df = pd.read_csv(lineups_csv)
@@ -125,18 +142,27 @@ def load_lineups(lineups_csv: str) -> pd.DataFrame:
             raise ValueError(f"Lineups CSV missing required column: {col}")
     return df
 
-def build_player_maps(proj_df: pd.DataFrame):
+def build_player_maps(proj_df: pd.DataFrame, id_col: str, proj_col: str, pos_col: str, team_col: Optional[str], name_col: Optional[str]):
     proj_map, pos_map, team_map, opp_map, name_map = {}, {}, {}, {}, {}
-    has_team = "B_Team" in proj_df.columns
-    has_opp  = "B_Opponent" in proj_df.columns
-    has_name = "B_Name" in proj_df.columns
+    has_team = team_col is not None and team_col in proj_df.columns
+    has_opp = "Opponent" in proj_df.columns
+    has_name = name_col is not None and name_col in proj_df.columns
+    
+    # Find opponent column if it exists
+    opp_col = "Opponent" if "Opponent" in proj_df.columns else None
+    if opp_col is None:
+        for c in proj_df.columns:
+            if "opp" in c.lower():
+                opp_col = c
+                break
+    
     for _, r in proj_df.iterrows():
-        pid = str(r["B_Id"])
-        proj_map[pid] = float(r["A_ppg_projection"]) if pd.notna(r["A_ppg_projection"]) else 0.0
-        pos_map[pid]  = str(r["B_Position"]) if pd.notna(r["B_Position"]) else ""
-        team_map[pid] = (str(r["B_Team"]) if pd.notna(r.get("B_Team", None)) else None) if has_team else None
-        opp_map[pid]  = (str(r["B_Opponent"]) if pd.notna(r.get("B_Opponent", None)) else None) if has_opp else None
-        name_map[pid] = (str(r["B_Name"]) if pd.notna(r.get("B_Name", None)) else None) if has_name else None
+        pid = str(r[id_col])
+        proj_map[pid] = float(r[proj_col]) if pd.notna(r[proj_col]) else 0.0
+        pos_map[pid]  = str(r[pos_col]) if pd.notna(r[pos_col]) else ""
+        team_map[pid] = (str(r[team_col]) if pd.notna(r.get(team_col, None)) else None) if has_team else None
+        opp_map[pid]  = (str(r[opp_col]) if pd.notna(r.get(opp_col, None)) else None) if opp_col else None
+        name_map[pid] = (str(r[name_col]) if pd.notna(r.get(name_col, None)) else None) if has_name else None
     return proj_map, pos_map, team_map, opp_map, name_map
 
 # ------------------- Pool usage + pruning -------------------
@@ -458,7 +484,7 @@ def main():
     pdf, idcol, projcol, poscol, teamcol, namecol = load_projections(proj_csv)
 
     print("Building maps...")
-    proj_map, pos_map, team_map, opp_map, name_map = build_player_maps(pdf)
+    proj_map, pos_map, team_map, opp_map, name_map = build_player_maps(pdf, idcol, projcol, poscol, teamcol, namecol)
 
     # Hard-exclude scratched players (proj <= 0)
     zero_ids = {pid for pid, p in proj_map.items() if p <= 0}
