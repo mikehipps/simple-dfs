@@ -20,6 +20,7 @@ from typing import List, Dict, Tuple, Optional, Set
 from pathlib import Path
 from datetime import datetime  # add near the top
 import pandas as pd
+import inputs
 
 
 # ------------------- Roster + parsing helpers -------------------
@@ -254,12 +255,12 @@ def passes_caps(lu: Lineup, selected: List[Lineup], counts: Dict[str,int],
     if frozenset(lu.players_id) in seen_sets: return False
     return True
 
-def greedy_select(lineups: List[Lineup], n_target: int = 150,
-                  cap_pct: float = 20.0, max_repeat_init: int = 4,
-                  w_proj: float = 0.55, w_stack: float = 0.15,
-                  w_uniq: float = 0.30, w_chalk: float = 0.05,
-                  qb2_bonus: float = 1.0, bring_bonus: float = 0.6,
-                  seed: Optional[int] = 42):
+def greedy_select(lineups: List[Lineup], n_target: int = inputs.N_TARGET,
+                  cap_pct: float = inputs.CAP_PCT, max_repeat_init: int = inputs.MAX_REPEAT_INIT,
+                  w_proj: float = inputs.W_PROJ, w_stack: float = inputs.W_STACK,
+                  w_uniq: float = inputs.W_UNIQ, w_chalk: float = inputs.W_CHALK,
+                  qb2_bonus: float = inputs.QB2_BONUS, bring_bonus: float = inputs.BRING_BONUS,
+                  seed: Optional[int] = inputs.SEED):
     if seed is not None: random.seed(seed)
     cap_count = int(math.floor((cap_pct/100.0) * n_target + 1e-9))  # e.g., 37 for 150 @ 25%
     proj_list = [lu.proj_sum for lu in lineups]
@@ -281,7 +282,7 @@ def greedy_select(lineups: List[Lineup], n_target: int = 150,
     counts: Dict[str,int] = {}
     seen_sets: Set[frozenset] = set()
     max_repeat = max_repeat_init
-    window = 5000 if len(lineups) > 6000 else len(lineups)
+    window = inputs.SELECTION_WINDOW if len(lineups) > 6000 else len(lineups)
 
     relaxations = 0; ptr = 0; stalled = 0
     while len(selected) < n_target and ptr < len(order):
@@ -295,7 +296,7 @@ def greedy_select(lineups: List[Lineup], n_target: int = 150,
             for pid in lu.players_id:
                 u = counts.get(pid, 0) / max(1, cap_count)
                 pen += u*u
-            score = base_scores[i][0] - 0.05*pen
+            score = base_scores[i][0] - inputs.BREADTH_PENALTY_FACTOR * pen
             if score > best_score: best_score = score; best_i = i
         if best_i is not None:
             lu = lineups[best_i]
@@ -305,7 +306,7 @@ def greedy_select(lineups: List[Lineup], n_target: int = 150,
             stalled = 0
         else:
             stalled += 1
-            if stalled >= 3 and max_repeat < 6:
+            if stalled >= inputs.STALLED_THRESHOLD and max_repeat < inputs.MAX_REPEAT_RELAXATION_LIMIT:
                 max_repeat += 1; relaxations += 1; stalled = 0
             else:
                 ptr += window
@@ -440,10 +441,10 @@ def main():
     ap.add_argument("--template", type=str, help="Path to FanDuel template CSV")
     ap.add_argument("--out-prefix", type=str, default=f"mme150-{ts}")
     ap.add_argument("--out-dir", type=str, default="autoMME", help="Output folder (default: autoMME)")
-    ap.add_argument("--cap", type=float, default=20.0, help="Max exposure percent per player (default 25)")
-    ap.add_argument("--repeat", type=int, default=4, help="Max repeating players between any two selected (start)")
-    ap.add_argument("--min-usage-pct", type=float, default=2.0, help="Prune lineups containing players under this pool-usage percentage (default 2.0)")
-    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--cap", type=float, default=inputs.CAP_PCT, help="Max exposure percent per player (default 25)")
+    ap.add_argument("--repeat", type=int, default=inputs.MAX_REPEAT_INIT, help="Max repeating players between any two selected (start)")
+    ap.add_argument("--min-usage-pct", type=float, default=inputs.MIN_USAGE_PCT, help="Prune lineups containing players under this pool-usage percentage (default 2.0)")
+    ap.add_argument("--seed", type=int, default=inputs.SEED)
     args = ap.parse_args()
 
     lineups_csv = args.lineups or pick_file_cli_or_gui("Select LINEUPS CSV")
@@ -482,8 +483,8 @@ def main():
     print("Making lineup objects...")
     lineup_objs = make_lineup_objects(ldf_pruned, proj_map, team_map, opp_map, pos_map, usage)
 
-    print(f"Selecting 150 (cap={args.cap}%, repeat_start={args.repeat})...")
-    selected, counts, diagnostics = greedy_select(lineup_objs, n_target=150, cap_pct=args.cap, max_repeat_init=args.repeat, seed=args.seed)
+    print(f"Selecting {inputs.N_TARGET} (cap={args.cap}%, repeat_start={args.repeat})...")
+    selected, counts, diagnostics = greedy_select(lineup_objs, n_target=inputs.N_TARGET, cap_pct=args.cap, max_repeat_init=args.repeat, seed=args.seed)
 
     # build fallback names for usage report
     fallback_names: Dict[str,str] = {}
@@ -505,7 +506,7 @@ def main():
     export_usage_report(selected, usage, str(out_usage), name_map, fallback_names)
 
     print(f"Writing Summary -> {out_summary}")
-    write_summary(str(out_summary), diagnostics, counts, n_target=150, prune_stats=prune_stats)
+    write_summary(str(out_summary), diagnostics, counts, n_target=inputs.N_TARGET, prune_stats=prune_stats)
 
     total_proj = diagnostics.get("total_proj", 0.0)
     max_exp_ct = max(counts.values()) if counts else 0
