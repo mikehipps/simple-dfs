@@ -9,11 +9,11 @@ import logging
 import sys
 import os
 
-# Add the current directory to Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add the parent directory to Python path to import sanitization module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sanitization import (
-    sanitize_percentage, sanitize_salary, sanitize_position, 
+    sanitize_percentage, sanitize_salary, sanitize_position,
     sanitize_fppg, sanitize_player_id, sanitize_name
 )
 

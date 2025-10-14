@@ -7,10 +7,16 @@ to ensure they handle various input formats correctly.
 
 import pandas as pd
 import logging
+import sys
+import os
+
+# Add the parent directory to Python path to import sanitization module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from sanitization import (
-    sanitize_player_row, 
-    sanitize_percentage, 
-    sanitize_salary, 
+    sanitize_player_row,
+    sanitize_percentage,
+    sanitize_salary,
     sanitize_position,
     sanitize_fppg,
     sanitize_random,

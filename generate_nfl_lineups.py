@@ -4,9 +4,6 @@
 NFL Lineup Generator using pydfs-lineup-optimizer with Dynamic Queue System
 Generates exactly {TOTAL_LINEUPS} NFL lineups for FanDuel Classic contest from {CSV_FILE}
 Uses {NUM_WORKERS} parallel workers with dynamic queue for optimal load balancing
-Automatically selects strategy based on PROGRESSIVE_FACTOR:
-- ProgressiveFantasyPointsStrategy when PROGRESSIVE_FACTOR > 0
-- RandomFantasyPointsStrategy when PROGRESSIVE_FACTOR = 0
 Features graceful cancellation support with Ctrl+C to save partial results
 
 VIRTUAL ENVIRONMENT REMINDER:
@@ -32,11 +29,11 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydfs_lineup_optimizer import Site, Sport, get_optimizer
 from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
-from pydfs_lineup_optimizer.fantasy_points_strategy import BaseFantasyPointsStrategy, ProgressiveFantasyPointsStrategy
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
 
 # Import CSV processing from dedicated module
 from csv_processor import preprocess_csv
+
 
 # Import configuration from external file
 try:
@@ -47,8 +44,6 @@ try:
         MAX_EXPOSURE,
         MAX_REPEATING_PLAYERS,
         MIN_SALARY,
-        PROGRESSIVE_FACTOR,
-        RANDOM_FACTOR,
         CSV_FILE
     )
 except ImportError:
@@ -84,53 +79,6 @@ def signal_handler(signum, frame):
     logger = logging.getLogger(__name__)
     logger.info("Interruption detected (Ctrl+C). Initiating graceful shutdown...")
     cancellation_requested.set()
-
-
-class RandomFantasyPointsStrategy(BaseFantasyPointsStrategy):
-    """
-    Custom fantasy points strategy that uses the Random column from CSV
-    to set min and max deviation for player projections.
-    """
-    
-    def __init__(self, random_values_dict):
-        """
-        Initialize strategy with random values dictionary
-        
-        Args:
-            random_values_dict (dict): Dictionary mapping player IDs to random decimal values (0-1 range)
-        """
-        self.random_values_dict = random_values_dict
-    
-    def get_player_fantasy_points(self, player):
-        """
-        Get fantasy points for player with deviation based on Random column value
-        
-        Args:
-            player: Player object
-            
-        Returns:
-            float: Adjusted fantasy points with random deviation
-        """
-        player_id = str(player.id)
-        
-        if player_id in self.random_values_dict:
-            random_decimal = self.random_values_dict[player_id]
-            
-            # Calculate deviations: min = half of random, max = 2x random
-            min_deviation = random_decimal / RANDOM_FACTOR
-            max_deviation = random_decimal * RANDOM_FACTOR
-            
-            # Apply random deviation to player's FPPG
-            import random
-            deviation = random.uniform(min_deviation, max_deviation)
-            direction = random.choice([-1, 1])
-            
-            adjusted_fppg = player.fppg * (1 + direction * deviation)
-            return max(adjusted_fppg, 0)  # Ensure non-negative
-        else:
-            # Default behavior if player not found
-            return player.fppg
-
 
 
 
@@ -186,18 +134,6 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         logger.info(f"Thread {thread_id}: Loading players from CSV")
         optimizer.load_players_from_csv(processed_csv)
         
-        # Apply strategy based on PROGRESSIVE_FACTOR value
-        if PROGRESSIVE_FACTOR > 0:
-            # Use ProgressiveFantasyPointsStrategy only
-            progressive_strategy = ProgressiveFantasyPointsStrategy(scale=PROGRESSIVE_FACTOR)
-            optimizer.set_fantasy_points_strategy(progressive_strategy)
-            logger.info(f"Thread {thread_id}: Using ProgressiveFantasyPointsStrategy with scale {PROGRESSIVE_FACTOR}")
-        else:
-            # Use RandomFantasyPointsStrategy only
-            random_strategy = RandomFantasyPointsStrategy(random_values_dict)
-            optimizer.set_fantasy_points_strategy(random_strategy)
-            logger.info(f"Thread {thread_id}: Using RandomFantasyPointsStrategy with {len(random_values_dict)} players")
-        
         # Apply constraints
         optimizer.set_max_repeating_players(MAX_REPEATING_PLAYERS)
         optimizer.set_min_salary_cap(MIN_SALARY)
@@ -209,11 +145,9 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         except Exception as e:
             logger.warning(f"Thread {thread_id}: Could not apply D/ST vs opposing QB/RB restriction - {str(e)}")
         
-        # Log active strategy
-        strategy_info = f"ProgressiveFantasyPointsStrategy ({PROGRESSIVE_FACTOR})" if PROGRESSIVE_FACTOR > 0 else "RandomFantasyPointsStrategy"
         logger.info(f"Thread {thread_id}: Active constraints - "
                    f"Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY}), "
-                   f"D/ST vs opposing QB/RB restriction, {strategy_info}, MIP Solver")
+                   f"D/ST vs opposing QB/RB restriction, MIP Solver")
         
         # Continuously process batches from the queue until empty
         while not cancellation_requested.is_set():
@@ -343,11 +277,7 @@ def generate_lineups_dynamic():
         logger.info(f"Starting dynamic queue lineup generation with {NUM_WORKERS} workers")
         logger.info(f"Target: {TOTAL_LINEUPS} total lineups using dynamic queue system")
         logger.info(f"Configuration: {total_batches} batches × {LINEUPS_PER_BATCH} lineups = {TOTAL_LINEUPS} lineups exactly")
-        # Log strategy selection
-        if PROGRESSIVE_FACTOR > 0:
-            logger.info(f"Using MIP Solver and ProgressiveFantasyPointsStrategy ({PROGRESSIVE_FACTOR})")
-        else:
-            logger.info(f"Using MIP Solver and RandomFantasyPointsStrategy with {len(random_values_dict)} players")
+        logger.info(f"Using MIP Solver with default optimizer strategy")
         logger.info(f"Active constraints: Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY})")
         logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
@@ -387,6 +317,7 @@ def generate_lineups_dynamic():
         if cancellation_requested.is_set():
             logger.info("Graceful shutdown completed. Saving partial results...")
             lineup_filepath, usage_filepath = save_partial_results(all_lineups, process_start_time)
+            
             logger.info(f"Graceful shutdown complete. {len(all_lineups)} lineups saved as partial results.")
             return lineup_filepath, usage_filepath, all_lineups
         

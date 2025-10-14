@@ -5,7 +5,7 @@ This file should be tracked in version control
 
 STRATEGY SELECTION LOGIC:
 - If PROGRESSIVE_FACTOR > 0: Use ProgressiveFantasyPointsStrategy only
-- If PROGRESSIVE_FACTOR = 0: Use RandomFantasyPointsStrategy only
+- If PROGRESSIVE_FACTOR = 0: Use default optimizer strategy (no custom randomization)
 - Never use both strategies simultaneously
 """
 
@@ -20,7 +20,7 @@ MAX_REPEATING_PLAYERS = 3
 MIN_SALARY = 59500
 
 # Strategy Configuration
-PROGRESSIVE_FACTOR = 0.02  # Set to 0 to use RandomFantasyPointsStrategy, > 0 for ProgressiveFantasyPointsStrategy
+PROGRESSIVE_FACTOR = 0.02  # Set to 0 to use default optimizer strategy, > 0 for ProgressiveFantasyPointsStrategy
 
 # File Configuration
 CSV_FILE = "NFL6-CLEAN2.csv"
