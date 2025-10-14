@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydfs_lineup_optimizer import Site, Sport, get_optimizer
 from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
-from pydfs_lineup_optimizer.fantasy_points_strategy import RandomFantasyPointsStrategy
+from custom_random_strategy import CustomRandomFantasyPointsStrategy
 
 # Import CSV processing from dedicated module
 from csv_processor import preprocess_csv
@@ -133,10 +133,10 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         optimizer = get_optimizer(Site.FANDUEL, Sport.FOOTBALL)
         optimizer._solver = MIPSolver()  # Use MIP solver instead of default
         
-        # Apply RandomFantasyPointsStrategy if enabled
+        # Apply CustomRandomFantasyPointsStrategy if enabled
         if ENABLE_RANDOM:
-            logger.info(f"Thread {thread_id}: Using RandomFantasyPointsStrategy with Min/Max Deviation columns")
-            optimizer.set_fantasy_points_strategy(RandomFantasyPointsStrategy())
+            logger.info(f"Thread {thread_id}: Using CustomRandomFantasyPointsStrategy with Min/Max Deviation columns")
+            optimizer.set_fantasy_points_strategy(CustomRandomFantasyPointsStrategy())
         else:
             logger.info(f"Thread {thread_id}: Using standard projection-based optimization")
         
@@ -287,9 +287,9 @@ def generate_lineups_dynamic():
         logger.info(f"Starting dynamic queue lineup generation with {NUM_WORKERS} workers")
         logger.info(f"Target: {TOTAL_LINEUPS} total lineups using dynamic queue system")
         logger.info(f"Configuration: {total_batches} batches × {LINEUPS_PER_BATCH} lineups = {TOTAL_LINEUPS} lineups exactly")
-        logger.info(f"Using MIP Solver with {'RandomFantasyPointsStrategy' if ENABLE_RANDOM else 'default optimizer strategy'}")
+        logger.info(f"Using MIP Solver with {'CustomRandomFantasyPointsStrategy' if ENABLE_RANDOM else 'default optimizer strategy'}")
         logger.info(f"Active constraints: Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY})")
-        logger.info(f"Random Fantasy Points Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
+        logger.info(f"Custom Random Fantasy Points Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
         logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
         # Use ThreadPoolExecutor for better resource management
