@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydfs_lineup_optimizer import Site, Sport, get_optimizer
 from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
+from pydfs_lineup_optimizer.fantasy_points_strategy import RandomFantasyPointsStrategy
 
 # Import CSV processing from dedicated module
 from csv_processor import preprocess_csv
@@ -44,7 +45,8 @@ try:
         MAX_EXPOSURE,
         MAX_REPEATING_PLAYERS,
         MIN_SALARY,
-        CSV_FILE
+        CSV_FILE,
+        ENABLE_RANDOM
     )
 except ImportError:
     print("ERROR: Configuration file 'inputs.py' not found.")
@@ -131,6 +133,13 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         optimizer = get_optimizer(Site.FANDUEL, Sport.FOOTBALL)
         optimizer._solver = MIPSolver()  # Use MIP solver instead of default
         
+        # Apply RandomFantasyPointsStrategy if enabled
+        if ENABLE_RANDOM:
+            logger.info(f"Thread {thread_id}: Using RandomFantasyPointsStrategy with Min/Max Deviation columns")
+            optimizer.set_fantasy_points_strategy(RandomFantasyPointsStrategy())
+        else:
+            logger.info(f"Thread {thread_id}: Using standard projection-based optimization")
+        
         logger.info(f"Thread {thread_id}: Loading players from CSV")
         optimizer.load_players_from_csv(processed_csv)
         
@@ -147,7 +156,8 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         
         logger.info(f"Thread {thread_id}: Active constraints - "
                    f"Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY}), "
-                   f"D/ST vs opposing QB/RB restriction, MIP Solver")
+                   f"D/ST vs opposing QB/RB restriction, MIP Solver, "
+                   f"Random Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
         
         # Continuously process batches from the queue until empty
         while not cancellation_requested.is_set():
@@ -277,8 +287,9 @@ def generate_lineups_dynamic():
         logger.info(f"Starting dynamic queue lineup generation with {NUM_WORKERS} workers")
         logger.info(f"Target: {TOTAL_LINEUPS} total lineups using dynamic queue system")
         logger.info(f"Configuration: {total_batches} batches × {LINEUPS_PER_BATCH} lineups = {TOTAL_LINEUPS} lineups exactly")
-        logger.info(f"Using MIP Solver with default optimizer strategy")
+        logger.info(f"Using MIP Solver with {'RandomFantasyPointsStrategy' if ENABLE_RANDOM else 'default optimizer strategy'}")
         logger.info(f"Active constraints: Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY})")
+        logger.info(f"Random Fantasy Points Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
         logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
         # Use ThreadPoolExecutor for better resource management
