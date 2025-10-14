@@ -1,12 +1,5 @@
 
 // ---------- helpers ----------
-const FALLBACK_SUFFIXES = ["jr","sr","ii","iii","iv","v"];
-const FALLBACK_NICK = {
-  "mike":"michael","tony":"anthony","aj":"a j","a.j.":"a j","jd":"j d","j.d.":"j d",
-  "rob":"robert","bob":"robert","rick":"richard","dave":"david","chris":"christopher",
-  "drew":"andrew","andy":"andrew","bill":"william","billy":"william","will":"william",
-  "alex":"alexander","sasha":"alexander"
-};
 
 const FALLBACK_NFL_CODE_BY_KEY = {
   "ari":"ARI","arizona":"ARI","arizona cardinals":"ARI","cardinals":"ARI",
@@ -54,8 +47,6 @@ const FALLBACK_NFL_FULL_BY_CODE = {
 };
 const FALLBACK_DST_PATTERNS = ["d/st","dst","defense","def"];
 
-let SUFFIXES;
-let NICK;
 let NFL_CODE_BY_KEY;
 let NFL_FULL_BY_CODE;
 let DST_PATTERNS;
@@ -88,9 +79,6 @@ function sanitizeStringList(list) {
     .map(item => (item ?? "").toString().trim().toLowerCase())
     .filter(Boolean);
 }
-function buildSuffixSet(list) {
-  return new Set(sanitizeStringList(list));
-}
 function applyTeamOverrides(map) {
   if (!isPlainObject(map)) return;
   Object.entries(map).forEach(([key, value]) => {
@@ -105,23 +93,11 @@ function applyTeamFullOverrides(map) {
     NFL_FULL_BY_CODE[key.toUpperCase()] = value;
   });
 }
-function applyNicknameOverrides(source) {
-  if (!isPlainObject(source)) return;
-  Object.entries(source).forEach(([key, value]) => {
-    if (typeof value !== "string") return;
-    const k = key.toLowerCase();
-    const v = value.toLowerCase();
-    if (k && v) NICK[k] = v;
-  });
-}
 function initializeDataFromFallback() {
   NFL_CODE_BY_KEY = {};
   applyTeamOverrides(FALLBACK_NFL_CODE_BY_KEY);
   NFL_FULL_BY_CODE = {};
   applyTeamFullOverrides(FALLBACK_NFL_FULL_BY_CODE);
-  NICK = {};
-  applyNicknameOverrides(FALLBACK_NICK);
-  SUFFIXES = buildSuffixSet(FALLBACK_SUFFIXES);
   DST_PATTERNS = sanitizeStringList(FALLBACK_DST_PATTERNS);
   DST_REGEX = buildDSTRegex(DST_PATTERNS);
 }
@@ -137,10 +113,8 @@ async function fetchJSON(path) {
 async function loadDataSeeds(sport) {
   const requestId = ++sportLoadToken;
   try {
-    const [teamData, nickData, suffixData, dstData] = await Promise.all([
+    const [teamData, dstData] = await Promise.all([
       fetchJSON(`data/${sport}_teams.json`),
-      fetchJSON("data/nicknames_common.json"),
-      fetchJSON("data/suffixes.json"),
       fetchJSON("data/dst_patterns.json")
     ]);
     if (requestId !== sportLoadToken) return;
@@ -152,12 +126,6 @@ async function loadDataSeeds(sport) {
     }
     if (teamData && isPlainObject(teamData.fullByCode)) {
       applyTeamFullOverrides(teamData.fullByCode);
-    }
-    if (isPlainObject(nickData)) {
-      applyNicknameOverrides(nickData);
-    }
-    if (Array.isArray(suffixData) && suffixData.length) {
-      SUFFIXES = buildSuffixSet(suffixData);
     }
     if (Array.isArray(dstData) && dstData.length) {
       DST_PATTERNS = sanitizeStringList(dstData);
@@ -180,9 +148,8 @@ function normText(x) {
 }
 function normName(name) {
   const t = normText(name);
-  const parts = t.split(" ").filter(Boolean).map(w => NICK[w] || w).join(" ").split(" ");
-  const cleaned = parts.filter(w => !SUFFIXES.has(w));
-  return cleaned.join(" ");
+  const parts = t.split(" ").filter(Boolean);
+  return parts.join(" ");
 }
 function canonTeam(t) {
   const k = normText(t);
