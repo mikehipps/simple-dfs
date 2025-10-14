@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Team Validation Test</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="theme-dark">
+<div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 12px;">
+  <h1 style="margin: 0;">Team Validation System Test</h1>
+</div>
+
+<p class="muted">This test demonstrates the team validation and manual mapping system implementation.</p>
+
+<fieldset>
+  <legend>Team Validation Features</legend>
+  
+  <h3>✅ Implemented Features:</h3>
+  <ul>
+    <li><strong>Team Extraction</strong> - Extracts unique team codes from both datasets</li>
+    <li><strong>Team Validation</strong> - Validates team matches using exact/known logic</li>
+    <li><strong>Manual Mapping UI</strong> - Dropdown interface for unmatched teams</li>
+    <li><strong>"Team missing" Option</strong> - For projections from bigger slates</li>
+    <li><strong>Run Match Button Control</strong> - Enabled only when all teams are mapped</li>
+    <li><strong>Fallback Storage</strong> - Manual mappings saved in localStorage per sport</li>
+    <li><strong>Integration</strong> - Manual mappings integrated into existing matching logic</li>
+  </ul>
+
+  <h3>🔧 How It Works:</h3>
+  <ol>
+    <li>Upload CSV files with team columns</li>
+    <li>System extracts unique team codes from both files</li>
+    <li>Validates exact matches between Sheet 1 and Sheet 2 teams</li>
+    <li>Shows manual mapping interface for unmatched teams</li>
+    <li>User maps each unmatched team to available Sheet 2 teams</li>
+    <li>Mappings are saved to localStorage for future use</li>
+    <li>"Run Match" button enabled only when all teams are mapped</li>
+    <li>Manual mappings applied during the merge process</li>
+  </ol>
+
+  <h3>🎯 Key Benefits:</h3>
+  <ul>
+    <li>Prevents merge with unmatched teams</li>
+    <li>Clear user interface for manual team mapping</li>
+    <li>Persistent mappings for future sessions</li>
+    <li>Handles bigger slate scenarios gracefully</li>
+    <li>Seamless integration with existing matching logic</li>
+  </ul>
+</fieldset>
+
+<fieldset>
+  <legend>Test Data Example</legend>
+  
+  <h4>Sample Team Scenarios:</h4>
+  
+  <div class="box small">
+    <strong>Sheet 1 Teams (Projections):</strong>
+    <ul>
+      <li>ARI, ATL, BAL, BUF, CAR, CHI, CIN, CLE, DAL, DEN</li>
+      <li>DET, GB, HOU, IND, JAX, KC, LV, LAC, LAR, MIA</li>
+      <li>MIN, NE, NO, NYG, NYJ, PHI, PIT, SF, SEA, TB</li>
+      <li>TEN, WAS</li>
+    </ul>
+  </div>
+  
+  <div class="box small">
+    <strong>Sheet 2 Teams (Actual):</strong>
+    <ul>
+      <li>ARI, ATL, BAL, BUF, CAR, CHI, CIN, CLE, DAL, DEN</li>
+      <li>DET, GB, HOU, IND, JAX, KC, LV, LAC, LAR, MIA</li>
+      <li>MIN, NE, NO, NYG, NYJ, PHI, PIT, SF, SEA, TB</li>
+      <li>TEN, WAS</li>
+    </ul>
+  </div>
+  
+  <p class="small muted">When teams don't match exactly, the system will show the manual mapping interface.</p>
+</fieldset>
+
+<fieldset>
+  <legend>Storage Test</legend>
+  
+  <div class="row">
+    <button onclick="testLocalStorage()">Test localStorage Team Mappings</button>
+    <button onclick="clearTestData()">Clear Test Data</button>
+  </div>
+  
+  <div id="storageTestResult" class="small" style="margin-top: 10px;"></div>
+</fieldset>
+
+<script>
+function testLocalStorage() {
+  const resultDiv = document.getElementById('storageTestResult');
+  
+  try {
+    // Test team mappings storage
+    const testMappings = {
+      'nfl': { 'TEST1': 'TEST2', 'TEST3': 'TEST4' },
+      'mlb': { 'NYM': 'NYN', 'CHC': 'CHN' }
+    };
+    
+    localStorage.setItem('csvMatchTeamMappings', JSON.stringify(testMappings));
+    
+    const retrieved = JSON.parse(localStorage.getItem('csvMatchTeamMappings') || '{}');
+    
+    resultDiv.innerHTML = `
+      <span class="chip ok">✓ localStorage Test Successful</span>
+      <div class="small muted">Stored mappings: ${JSON.stringify(retrieved)}</div>
+    `;
+  } catch (error) {
+    resultDiv.innerHTML = `
+      <span class="chip bad">✗ localStorage Test Failed</span>
+      <div class="small muted">Error: ${error.message}</div>
+    `;
+  }
+}
+
+function clearTestData() {
+  localStorage.removeItem('csvMatchTeamMappings');
+  document.getElementById('storageTestResult').innerHTML = `
+    <span class="chip info">✓ Test Data Cleared</span>
+  `;
+}
+
+// Initialize with some test data
+testLocalStorage();
+</script>
+
+</body>
+</html>

@@ -60,3 +60,48 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 th { background: var(--table-header); position: sticky; top: 0; }
 .review-table { max-height: 300px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .row-inline { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+/* Team validation styles */
+.team-mapping-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 8px;
+  background: var(--surface-alt);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.team-mapping-label {
+  min-width: 60px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.team-mapping-arrow {
+  color: var(--muted);
+  font-weight: bold;
+}
+
+.team-mapping-select {
+  flex: 1;
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.secondary {
+  background: var(--surface-alt);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.auto-selected-indicator {
+  color: var(--ok);
+  font-size: 0.9em;
+  font-weight: normal;
+  margin-left: 4px;
+}

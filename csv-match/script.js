@@ -188,6 +188,86 @@ function download(filename, text) {
 function getAliases() { try { return JSON.parse(localStorage.getItem("csvMatchAliases") || "{}"); } catch { return {}; } }
 function setAliases(obj) { localStorage.setItem("csvMatchAliases", JSON.stringify(obj)); }
 
+// Team mapping storage functions
+function getTeamMappings(sport) {
+  try {
+    const mappings = JSON.parse(localStorage.getItem("csvMatchTeamMappings") || "{}");
+    return mappings[sport] || {};
+  } catch {
+    return {};
+  }
+}
+function setTeamMappings(sport, mappings) {
+  try {
+    const allMappings = JSON.parse(localStorage.getItem("csvMatchTeamMappings") || "{}");
+    allMappings[sport] = mappings;
+    localStorage.setItem("csvMatchTeamMappings", JSON.stringify(allMappings));
+  } catch {}
+}
+
+// Team extraction and validation functions
+function extractUniqueTeamCodes(rows, teamColumn, getName) {
+  const teams = new Set();
+  if (!rows || !teamColumn) {
+    console.log(`❌ extractUniqueTeamCodes: Missing rows or teamColumn`, { rows: !!rows, teamColumn });
+    return teams;
+  }
+  
+  console.log(`🔍 extractUniqueTeamCodes: Processing ${rows.length} rows with team column '${teamColumn}'`);
+  
+  for (const row of rows) {
+    const rawTeamValue = row[teamColumn];
+    const teamCode = canonTeam(rawTeamValue);
+    if (teamCode) {
+      teams.add(teamCode);
+      console.log(`   → Row team: '${rawTeamValue}' → '${teamCode}'`);
+    }
+  }
+  
+  console.log(`✅ extractUniqueTeamCodes: Found ${teams.size} unique teams:`, Array.from(teams));
+  return teams;
+}
+
+function validateTeamMatches(teamsA, teamsB, manualMappings = {}) {
+  console.log(`🔍 validateTeamMatches: teamsA=${teamsA.size}, teamsB=${teamsB.size}, manualMappings=${Object.keys(manualMappings).length}`);
+  
+  const unmatched = new Set();
+  const matched = new Set();
+  
+  // Check exact matches
+  for (const teamA of teamsA) {
+    if (teamsB.has(teamA)) {
+      matched.add(teamA);
+      console.log(`   ✅ Exact match: ${teamA}`);
+    } else if (manualMappings[teamA]) {
+      // Check if manual mapping exists and target team is in Sheet 2
+      if (teamsB.has(manualMappings[teamA])) {
+        matched.add(teamA);
+        console.log(`   ✅ Manual mapping: ${teamA} → ${manualMappings[teamA]}`);
+      } else {
+        unmatched.add(teamA);
+        console.log(`   ❌ Manual mapping invalid: ${teamA} → ${manualMappings[teamA]} (target not in Sheet 2)`);
+      }
+    } else {
+      unmatched.add(teamA);
+      console.log(`   ❌ No match: ${teamA}`);
+    }
+  }
+  
+  const result = {
+    allMatched: unmatched.size === 0,
+    unmatched: Array.from(unmatched),
+    matched: Array.from(matched)
+  };
+  
+  console.log(`✅ validateTeamMatches result:`, result);
+  return result;
+}
+
+function getAvailableSheet2Teams(teamsB) {
+  return Array.from(teamsB).sort();
+}
+
 
 // ---------- configuration ----------
 const REQUIRED_COLUMNS = {
@@ -202,6 +282,12 @@ let headersA = [], headersB = [];
 let mergedStore = null, manifest = null;
 let reviewItems = [];
 let columnMapping = { required: {}, optional: {} };
+let teamValidationState = {
+  teamsA: new Set(),
+  teamsB: new Set(),
+  manualMappings: {},
+  validationComplete: false
+};
 
 // ---------- UI refs ----------
 const themeToggle = document.getElementById("themeToggle");
@@ -227,6 +313,12 @@ const nameBSeparator = document.getElementById("nameBSeparator");
 const requiredMapping = document.getElementById("requiredMapping");
 const optionalMapping = document.getElementById("optionalMapping");
 const addOptionalColumn = document.getElementById("addOptionalColumn");
+const teamValidationSection = document.getElementById("teamValidationSection");
+const teamValidationStatus = document.getElementById("teamValidationStatus");
+const teamMappingSection = document.getElementById("teamMappingSection");
+const teamMappingContainer = document.getElementById("teamMappingContainer");
+const btnSaveTeamMappings = document.getElementById("btnSaveTeamMappings");
+const btnSkipTeamValidation = document.getElementById("btnSkipTeamValidation");
 const btnMerge = document.getElementById("btnMerge");
 const btnExportCSV = document.getElementById("btnExportCSV");
 const btnExportManifest = document.getElementById("btnExportManifest");
@@ -593,6 +685,12 @@ fileA.addEventListener("change", e => {
     fillRequiredMapping([...headersA, ...headersB]);
     // Auto-select name and team columns for File A
     autoSelectNameAndTeamColumns("A", headersA);
+    
+    // Trigger team validation if both files are loaded
+    if (A && B) {
+      console.log("📥 File A loaded, triggering team validation...");
+      triggerTeamValidation();
+    }
   });
 });
 fileB.addEventListener("change", e => {
@@ -606,6 +704,12 @@ fileB.addEventListener("change", e => {
     fillRequiredMapping([...headersA, ...headersB]);
     // Auto-select name and team columns for File B
     autoSelectNameAndTeamColumns("B", headersB);
+    
+    // Trigger team validation if both files are loaded
+    if (A && B) {
+      console.log("📥 File B loaded, triggering team validation...");
+      triggerTeamValidation();
+    }
   });
 });
 
@@ -621,16 +725,31 @@ function buildNameGetter(mode, singleSel, composeSel, sep) {
   }
 }
 
-function buildIndex(rows, getName, teamCol) {
+function buildIndex(rows, getName, teamCol, manualTeamMappings = {}) {
   const aliases = getAliases();
+  console.log(`🔍 buildIndex: Processing ${rows.length} rows with manualTeamMappings:`, manualTeamMappings);
+  
   const items = rows.map(r => {
-    const teamCode = canonTeam(r[teamCol]);
+    let teamCode = canonTeam(r[teamCol]);
+    const originalTeamCode = teamCode;
+    
+    // Apply manual team mapping if exists
+    if (manualTeamMappings[teamCode]) {
+      console.log(`   🔀 buildIndex mapping: ${teamCode} → ${manualTeamMappings[teamCode]}`);
+      teamCode = manualTeamMappings[teamCode];
+    }
+    
     let nameRaw = getName(r);
     let n = normName(nameRaw);
     if (isDSTName(nameRaw, teamCode)) n = dstNormalizedName(nameRaw, teamCode);
     const aliasKey = teamCode + "::" + n;
     const aliased = aliases[aliasKey];
     const finalName = aliased || n;
+    
+    if (originalTeamCode !== teamCode) {
+      console.log(`   ✅ buildIndex applied mapping: ${originalTeamCode} → ${teamCode} for player: ${nameRaw}`);
+    }
+    
     return { row:r, _norm_name:finalName, _norm_team:teamCode };
   });
   const map = new Map();
@@ -653,6 +772,183 @@ function buildIndex(rows, getName, teamCol) {
 
 // Remove old gatherKeep function - no longer needed
 
+// Team validation functions
+function runTeamValidation() {
+  console.log("🔍 runTeamValidation() called");
+  if (!A || !B) {
+    console.log("❌ Validation failed: Missing A or B data");
+    return false;
+  }
+  
+  const primary = [...document.querySelectorAll('input[name="primary"]')].find(r => r.checked)?.value || "A";
+  const teamP = primary === "A" ? teamA.value : teamB.value;
+  const teamS = primary === "A" ? teamB.value : teamA.value;
+  
+  console.log(`📊 Primary: ${primary}, TeamP: ${teamP}, TeamS: ${teamS}`);
+  
+  if (!teamP || !teamS || teamP.startsWith("—") || teamS.startsWith("—")) {
+    console.log("❌ Validation failed: Invalid team column selections");
+    return false;
+  }
+  
+  // Extract teams from both datasets
+  const getNameA = buildNameGetter(nameModeA.value, nameA, nameACompose, nameASeparator.value);
+  const getNameB = buildNameGetter(nameModeB.value, nameB, nameBCompose, nameBSeparator.value);
+  
+  const P = primary === "A" ? A : B;
+  const S = primary === "A" ? B : A;
+  
+  console.log(`📊 Dataset sizes: P=${P.length}, S=${S.length}`);
+  
+  teamValidationState.teamsA = extractUniqueTeamCodes(P, teamP, getNameA);
+  teamValidationState.teamsB = extractUniqueTeamCodes(S, teamS, getNameB);
+  
+  console.log(`🏈 Teams extracted - Sheet 1:`, Array.from(teamValidationState.teamsA));
+  console.log(`🏈 Teams extracted - Sheet 2:`, Array.from(teamValidationState.teamsB));
+  
+  // Load existing manual mappings for this sport
+  const sport = sportSelect.value;
+  teamValidationState.manualMappings = getTeamMappings(sport);
+  console.log(`💾 Loaded manual mappings for ${sport}:`, teamValidationState.manualMappings);
+  
+  // Validate team matches
+  const validationResult = validateTeamMatches(
+    teamValidationState.teamsA,
+    teamValidationState.teamsB,
+    teamValidationState.manualMappings
+  );
+  
+  console.log(`✅ Validation result:`, validationResult);
+  
+  return validationResult;
+}
+
+function renderTeamMappingUI(validationResult) {
+  console.log("🎨 renderTeamMappingUI called with:", validationResult);
+  
+  teamMappingContainer.innerHTML = "";
+  
+  if (validationResult.allMatched) {
+    console.log("✅ All teams matched, hiding mapping section");
+    teamMappingSection.style.display = "none";
+    teamValidationStatus.innerHTML = `
+      <span class="chip ok">✓ All teams matched</span>
+      <span class="small muted">(${validationResult.matched.length} teams from Sheet 1 have matches in Sheet 2)</span>
+    `;
+    btnMerge.disabled = false;
+    return;
+  }
+  
+  // Show manual mapping interface
+  console.log(`⚠️ Showing mapping interface for ${validationResult.unmatched.length} unmatched teams`);
+  teamMappingSection.style.display = "block";
+  teamValidationStatus.innerHTML = `
+    <span class="chip warn">⚠ ${validationResult.unmatched.length} teams need mapping</span>
+    <span class="small muted">(${validationResult.matched.length} teams matched automatically)</span>
+  `;
+  
+  const availableTeams = getAvailableSheet2Teams(teamValidationState.teamsB);
+  console.log(`📋 Available Sheet 2 teams:`, availableTeams);
+  
+  validationResult.unmatched.forEach(teamA => {
+    console.log(`   🎯 Creating mapping row for: ${teamA}`);
+    const row = document.createElement("div");
+    row.className = "team-mapping-row";
+    
+    const teamLabel = document.createElement("span");
+    teamLabel.className = "team-mapping-label";
+    teamLabel.textContent = teamA;
+    
+    const arrow = document.createElement("span");
+    arrow.className = "team-mapping-arrow";
+    arrow.textContent = "→";
+    
+    const select = document.createElement("select");
+    select.className = "team-mapping-select";
+    
+    // Add "Team missing" option for bigger slates
+    const missingOpt = document.createElement("option");
+    missingOpt.value = "";
+    missingOpt.textContent = "— Team missing —";
+    select.appendChild(missingOpt);
+    
+    // Add available teams from Sheet 2
+    availableTeams.forEach(teamB => {
+      const opt = document.createElement("option");
+      opt.value = teamB;
+      opt.textContent = teamB;
+      select.appendChild(opt);
+    });
+    
+    // Set current value if mapping exists
+    if (teamValidationState.manualMappings[teamA]) {
+      select.value = teamValidationState.manualMappings[teamA];
+      console.log(`   💾 Restored mapping: ${teamA} → ${teamValidationState.manualMappings[teamA]}`);
+    }
+    
+    select.addEventListener("change", () => {
+      console.log(`   🔄 Mapping changed: ${teamA} → ${select.value}`);
+      if (select.value) {
+        teamValidationState.manualMappings[teamA] = select.value;
+      } else {
+        delete teamValidationState.manualMappings[teamA];
+      }
+      updateRunMatchButtonState();
+    });
+    
+    row.appendChild(teamLabel);
+    row.appendChild(arrow);
+    row.appendChild(select);
+    teamMappingContainer.appendChild(row);
+  });
+  
+  console.log(`✅ renderTeamMappingUI completed, created ${validationResult.unmatched.length} mapping rows`);
+  updateRunMatchButtonState();
+}
+
+function updateRunMatchButtonState() {
+  // Re-validate with current manual mappings
+  const validationResult = validateTeamMatches(
+    teamValidationState.teamsA,
+    teamValidationState.teamsB,
+    teamValidationState.manualMappings
+  );
+  
+  btnMerge.disabled = !validationResult.allMatched;
+  
+  if (validationResult.allMatched) {
+    teamValidationStatus.innerHTML = `
+      <span class="chip ok">✓ All teams mapped</span>
+      <span class="small muted">Ready to run match</span>
+    `;
+  }
+}
+
+// Event listeners for team validation buttons
+if (btnSaveTeamMappings) {
+  btnSaveTeamMappings.addEventListener("click", () => {
+    const sport = sportSelect.value;
+    setTeamMappings(sport, teamValidationState.manualMappings);
+    
+    // Re-run validation with saved mappings
+    const validationResult = runTeamValidation();
+    if (validationResult) {
+      renderTeamMappingUI(validationResult);
+    }
+    
+    alert("Team mappings saved for future use.");
+  });
+}
+
+if (btnSkipTeamValidation) {
+  btnSkipTeamValidation.addEventListener("click", () => {
+    teamValidationState.validationComplete = true;
+    teamValidationSection.style.display = "none";
+    btnMerge.disabled = false;
+    status.textContent = "Team validation skipped. Proceed with caution.";
+  });
+}
+
 document.getElementById("btnMerge").addEventListener("click", () => {
   if (!A || !B) { status.textContent = "Upload both files first."; return; }
   
@@ -661,6 +957,23 @@ document.getElementById("btnMerge").addEventListener("click", () => {
   if (validationError) {
     status.textContent = validationError;
     return;
+  }
+
+  // Run team validation if not already completed
+  if (!teamValidationState.validationComplete) {
+    const validationResult = runTeamValidation();
+    if (!validationResult) {
+      status.textContent = "Team validation failed. Check team column selections.";
+      return;
+    }
+    
+    teamValidationSection.style.display = "block";
+    renderTeamMappingUI(validationResult);
+    
+    if (!validationResult.allMatched) {
+      status.textContent = "Please map all teams before running match.";
+      return;
+    }
   }
 
   const primary = [...document.querySelectorAll('input[name="primary"]')].find(r => r.checked)?.value || "A";
@@ -680,7 +993,14 @@ document.getElementById("btnMerge").addEventListener("click", () => {
   }
 
   status.textContent = "Matching...";
-  const Sidx = buildIndex(S, nameGetterS, teamS);
+  
+  // Load manual team mappings for the current sport
+  const sport = sportSelect.value;
+  const manualTeamMappings = getTeamMappings(sport);
+  console.log(`💾 Loaded manual team mappings for ${sport}:`, manualTeamMappings);
+  
+  const Sidx = buildIndex(S, nameGetterS, teamS, manualTeamMappings);
+  console.log(`✅ Secondary index built with ${Sidx.items.length} items`);
 
   let auto=0, review=0, missing=0;
   let merged = [];
@@ -688,7 +1008,14 @@ document.getElementById("btnMerge").addEventListener("click", () => {
 
   for (let i=0;i<P.length;i++) {
     const pr = P[i];
-    const teamCode = canonTeam(pr[teamP]);
+    let teamCode = canonTeam(pr[teamP]);
+    
+    // Apply manual team mapping to primary dataset team code
+    if (manualTeamMappings[teamCode]) {
+      console.log(`🔀 Applying manual team mapping: ${teamCode} → ${manualTeamMappings[teamCode]}`);
+      teamCode = manualTeamMappings[teamCode];
+    }
+    
     let rawName = nameGetterP(pr);
     let norm = normName(rawName);
     if (isDSTName(rawName, teamCode)) norm = dstNormalizedName(rawName, teamCode);
@@ -699,8 +1026,18 @@ document.getElementById("btnMerge").addEventListener("click", () => {
 
     let match = null, reason = "";
     const hard = Sidx.map.get(aliasedNorm + "||" + teamCode) || [];
-    if (hard.length === 1) { match = hard[0].row; reason = "exact"; auto++; }
-    else if (hard.length > 1) { match = hard[0].row; reason = "exact_multi"; auto++; }
+    if (hard.length === 1) {
+      match = hard[0].row;
+      reason = "exact";
+      auto++;
+      console.log(`✅ Exact match found: ${rawName} (${teamCode})`);
+    }
+    else if (hard.length > 1) {
+      match = hard[0].row;
+      reason = "exact_multi";
+      auto++;
+      console.log(`✅ Exact match (multiple): ${rawName} (${teamCode})`);
+    }
     else {
       const fuse = Sidx.fuseByTeam.get(teamCode);
       if (fuse) {
@@ -712,13 +1049,16 @@ document.getElementById("btnMerge").addEventListener("click", () => {
           reason = "review"; review++;
           const cands = res.map(x => ({ name: x.item._norm_name, row: x.item.row }));
           reviewItems.push({ idx:i, projRow: pr, teamCode, candidates: cands, choice: cands[0]?.name || "", saveAlias: true, rawName });
+          console.log(`⚠️ Review needed: ${rawName} (${teamCode}) - ${res.length} candidates`);
         } else {
           reason = "missing"; missing++;
           reviewItems.push({ idx:i, projRow: pr, teamCode, candidates: [], choice: "", saveAlias: false, rawName });
+          console.log(`❌ No match found: ${rawName} (${teamCode})`);
         }
       } else {
         reason = "missing"; missing++;
         reviewItems.push({ idx:i, projRow: pr, teamCode, candidates: [], choice: "", saveAlias: false, rawName });
+        console.log(`❌ No team index: ${rawName} (${teamCode})`);
       }
     }
 
@@ -969,3 +1309,110 @@ function testStep2SmartDefaults() {
 // Uncomment the line below to run tests in browser console
 // testStep2SmartDefaults();
 
+// Team validation trigger function
+function triggerTeamValidation() {
+  console.log("🚀 triggerTeamValidation() called");
+  
+  if (!A || !B) {
+    console.log("❌ triggerTeamValidation: Missing A or B data");
+    return;
+  }
+  
+  const primary = [...document.querySelectorAll('input[name="primary"]')].find(r => r.checked)?.value || "A";
+  const teamP = primary === "A" ? teamA.value : teamB.value;
+  const teamS = primary === "A" ? teamB.value : teamA.value;
+  
+  console.log(`📊 triggerTeamValidation - Primary: ${primary}, TeamP: ${teamP}, TeamS: ${teamS}`);
+  
+  if (!teamP || !teamS || teamP.startsWith("—") || teamS.startsWith("—")) {
+    console.log("❌ triggerTeamValidation: Invalid team column selections");
+    return;
+  }
+  
+  // Run team validation
+  const validationResult = runTeamValidation();
+  if (validationResult) {
+    console.log("✅ triggerTeamValidation: Validation completed, rendering UI");
+    renderTeamMappingUI(validationResult);
+    teamValidationSection.style.display = "block";
+  } else {
+    console.log("❌ triggerTeamValidation: Validation failed");
+  }
+}
+
+// Add event listeners for team column changes
+if (teamA) {
+  teamA.addEventListener("change", () => {
+    console.log("🔄 Team A column changed, triggering validation");
+    if (A && B) triggerTeamValidation();
+  });
+}
+
+if (teamB) {
+  teamB.addEventListener("change", () => {
+    console.log("🔄 Team B column changed, triggering validation");
+    if (A && B) triggerTeamValidation();
+  });
+}
+
+// Add event listener for primary file selection changes
+document.querySelectorAll('input[name="primary"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    console.log("🔄 Primary file selection changed, triggering validation");
+    if (A && B) triggerTeamValidation();
+  });
+});
+
+// Test function for manual team mapping integration
+function testManualTeamMappingIntegration() {
+  console.log("🧪 Testing manual team mapping integration...");
+  
+  // Test scenario: Manual mapping of "NYG" to "NYJ"
+  const testManualMappings = {
+    "NYG": "NYJ"
+  };
+  
+  // Create test data
+  const testRows = [
+    { Name: "Saquon Barkley", Team: "NYG" },
+    { Name: "Aaron Rodgers", Team: "NYJ" },
+    { Name: "Daniel Jones", Team: "NYG" }
+  ];
+  
+  const getName = (row) => row.Name;
+  const teamCol = "Team";
+  
+  console.log("📋 Test data:", testRows);
+  console.log("🗺️ Manual mappings:", testManualMappings);
+  
+  // Test buildIndex with manual mappings
+  const index = buildIndex(testRows, getName, teamCol, testManualMappings);
+  
+  console.log("🔍 Index items:");
+  index.items.forEach(item => {
+    console.log(`   - ${item.row.Name} (${item.row.Team}) → ${item._norm_team}`);
+  });
+  
+  // Verify mappings were applied
+  const nygPlayers = index.items.filter(item => item.row.Team === "NYG");
+  const nyjPlayers = index.items.filter(item => item.row.Team === "NYJ");
+  
+  console.log("✅ Verification:");
+  console.log(`   - NYG players (${nygPlayers.length}):`, nygPlayers.map(p => p.row.Name));
+  console.log(`   - NYJ players (${nyjPlayers.length}):`, nyjPlayers.map(p => p.row.Name));
+  
+  // Check if NYG players were mapped to NYJ
+  const mappedPlayers = nygPlayers.filter(p => p._norm_team === "NYJ");
+  console.log(`   - NYG → NYJ mappings: ${mappedPlayers.length}/${nygPlayers.length}`);
+  
+  if (mappedPlayers.length === nygPlayers.length) {
+    console.log("🎉 SUCCESS: All manual team mappings were properly applied in buildIndex!");
+  } else {
+    console.log("❌ FAILURE: Manual team mappings were not properly applied.");
+  }
+  
+  return mappedPlayers.length === nygPlayers.length;
+}
+
+// Uncomment the line below to run the test in browser console
+// testManualTeamMappingIntegration();

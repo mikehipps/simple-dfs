@@ -106,9 +106,27 @@
 </fieldset>
 
 <fieldset>
-  <legend>4) Merge</legend>
+  <legend>4) Team validation</legend>
+  <div id="teamValidationSection" style="display:none;">
+    <div class="row">
+      <div id="teamValidationStatus" class="small"></div>
+    </div>
+    <div id="teamMappingSection" style="display:none; margin-top: 10px;">
+      <h4>Manual team mapping required</h4>
+      <p class="small muted">Map unmatched teams from Sheet 1 to available teams in Sheet 2:</p>
+      <div id="teamMappingContainer" class="box small"></div>
+      <div class="row">
+        <button id="btnSaveTeamMappings">Save team mappings</button>
+        <button id="btnSkipTeamValidation" class="secondary">Skip validation</button>
+      </div>
+    </div>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>5) Merge</legend>
   <div class="row">
-    <button id="btnMerge">Run match</button>
+    <button id="btnMerge" disabled>Run match</button>
     <span id="status" class="muted"></span>
   </div>
   <div id="summary" class="small"></div>
