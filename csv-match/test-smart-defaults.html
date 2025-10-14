@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Smart Defaults - CSV Match</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-case { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .pass { background-color: #d4edda; border-color: #c3e6cb; }
+        .fail { background-color: #f8d7da; border-color: #f5c6cb; }
+        .test-header { font-weight: bold; margin-bottom: 10px; }
+        .test-result { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Test Smart Defaults Implementation</h1>
+    <p>This page tests the Step 2 smart defaults implementation.</p>
+    
+    <div class="test-case">
+        <div class="test-header">Test 1: Standard Column Names</div>
+        <div>Headers: ["FirstName", "LastName", "Team", "Position", "Salary"]</div>
+        <div class="test-result" id="test1"></div>
+    </div>
+    
+    <div class="test-case">
+        <div class="test-header">Test 2: Underscore Column Names</div>
+        <div>Headers: ["first_name", "last_name", "team", "position", "salary"]</div>
+        <div class="test-result" id="test2"></div>
+    </div>
+    
+    <div class="test-case">
+        <div class="test-header">Test 3: Space Separated Column Names</div>
+        <div>Headers: ["First Name", "Last Name", "Team", "Position", "Salary"]</div>
+        <div class="test-result" id="test3"></div>
+    </div>
+    
+    <div class="test-case">
+        <div class="test-header">Test 4: Mixed Case Column Names</div>
+        <div>Headers: ["FIRSTNAME", "LASTNAME", "TEAM", "POSITION", "SALARY"]</div>
+        <div class="test-result" id="test4"></div>
+    </div>
+    
+    <div class="test-case">
+        <div class="test-header">Test 5: Fuzzy Matching Fallback</div>
+        <div>Headers: ["First", "Last", "Tm", "Pos", "Sal"]</div>
+        <div class="test-result" id="test5"></div>
+    </div>
+    
+    <div class="test-case">
+        <div class="test-header">Test 6: No Matches Found</div>
+        <div>Headers: ["Player", "Pos", "Sal", "Opp"]</div>
+        <div class="test-result" id="test6"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
+    <script>
+        // Copy the smart defaults functions from script.js for testing
+        function autoSelectNameColumns(headers) {
+            const selectedColumns = [];
+            
+            // Exact match patterns for first name
+            const firstNameExactPatterns = ["FirstName", "First_Name", "first_name", "First Name", "first name", "First", "first"];
+            // Exact match patterns for last name
+            const lastNameExactPatterns = ["LastName", "Last_Name", "last_name", "Last Name", "last name", "Last", "last"];
+            
+            // Try exact matching first
+            let firstNameColumn = findExactMatch(headers, firstNameExactPatterns);
+            let lastNameColumn = findExactMatch(headers, lastNameExactPatterns);
+            
+            // If exact matching fails, try fuzzy matching
+            if (!firstNameColumn) {
+                firstNameColumn = findFuzzyMatch(headers, firstNameExactPatterns);
+            }
+            if (!lastNameColumn) {
+                lastNameColumn = findFuzzyMatch(headers, lastNameExactPatterns);
+            }
+            
+            // Add matched columns to selection
+            if (firstNameColumn) selectedColumns.push(firstNameColumn);
+            if (lastNameColumn) selectedColumns.push(lastNameColumn);
+            
+            return selectedColumns;
+        }
+
+        function autoSelectTeamColumn(headers) {
+            // Exact match patterns for team
+            const teamExactPatterns = ["Team", "team", "TEAM", "Tm", "tm", "TM"];
+            
+            // Try exact matching first
+            let teamColumn = findExactMatch(headers, teamExactPatterns);
+            
+            // If exact matching fails, try fuzzy matching
+            if (!teamColumn) {
+                teamColumn = findFuzzyMatch(headers, teamExactPatterns);
+            }
+            
+            return teamColumn;
+        }
+
+        function findExactMatch(headers, patterns) {
+            for (const pattern of patterns) {
+                const exactMatch = headers.find(header => header === pattern);
+                if (exactMatch) {
+                    return exactMatch;
+                }
+            }
+            return null;
+        }
+
+        function findFuzzyMatch(headers, patterns) {
+            // Use Fuse.js for fuzzy matching
+            const fuse = new Fuse(headers, {
+                threshold: 0.3, // Lower threshold for more strict matching
+                includeScore: true
+            });
+            
+            let bestMatch = null;
+            let bestScore = 1; // Lower score is better
+            
+            for (const pattern of patterns) {
+                const results = fuse.search(pattern);
+                if (results.length > 0 && results[0].score < bestScore) {
+                    bestMatch = results[0].item;
+                    bestScore = results[0].score;
+                }
+            }
+            
+            // Only return if we have a reasonably good match
+            return bestScore < 0.4 ? bestMatch : null;
+        }
+
+        // Test cases
+        const testCases = [
+            {
+                id: "test1",
+                headers: ["FirstName", "LastName", "Team", "Position", "Salary"],
+                expectedNameColumns: ["FirstName", "LastName"],
+                expectedTeamColumn: "Team"
+            },
+            {
+                id: "test2",
+                headers: ["first_name", "last_name", "team", "position", "salary"],
+                expectedNameColumns: ["first_name", "last_name"],
+                expectedTeamColumn: "team"
+            },
+            {
+                id: "test3",
+                headers: ["First Name", "Last Name", "Team", "Position", "Salary"],
+                expectedNameColumns: ["First Name", "Last Name"],
+                expectedTeamColumn: "Team"
+            },
+            {
+                id: "test4",
+                headers: ["FIRSTNAME", "LASTNAME", "TEAM", "POSITION", "SALARY"],
+                expectedNameColumns: ["FIRSTNAME", "LASTNAME"],
+                expectedTeamColumn: "TEAM"
+            },
+            {
+                id: "test5",
+                headers: ["First", "Last", "Tm", "Pos", "Sal"],
+                expectedNameColumns: ["First", "Last"],
+                expectedTeamColumn: "Tm"
+            },
+            {
+                id: "test6",
+                headers: ["Player", "Pos", "Sal", "Opp"],
+                expectedNameColumns: [],
+                expectedTeamColumn: null
+            }
+        ];
+
+        // Run tests
+        testCases.forEach(testCase => {
+            const selectedNameColumns = autoSelectNameColumns(testCase.headers);
+            const selectedTeamColumn = autoSelectTeamColumn(testCase.headers);
+            
+            const namePassed = JSON.stringify(selectedNameColumns) === JSON.stringify(testCase.expectedNameColumns);
+            const teamPassed = selectedTeamColumn === testCase.expectedTeamColumn;
+            const overallPassed = namePassed && teamPassed;
+            
+            const resultDiv = document.getElementById(testCase.id);
+            resultDiv.innerHTML = `
+                <div>Expected Name Columns: ${JSON.stringify(testCase.expectedNameColumns)}</div>
+                <div>Got Name Columns: ${JSON.stringify(selectedNameColumns)}</div>
+                <div>Expected Team Column: ${testCase.expectedTeamColumn}</div>
+                <div>Got Team Column: ${selectedTeamColumn}</div>
+                <div><strong>Result: ${overallPassed ? '✓ PASS' : '✗ FAIL'}</strong></div>
+            `;
+            
+            if (overallPassed) {
+                resultDiv.parentElement.classList.add('pass');
+            } else {
+                resultDiv.parentElement.classList.add('fail');
+            }
+        });
+    </script>
+</body>
+</html>

@@ -13,6 +13,7 @@ body.theme-light {
   --ok: #0a7;
   --warn: #b50;
   --bad: #c00;
+  --info: #06c;
   --code-bg: #f1f3f8;
   --table-header: #e8ecf5;
   --input-bg: #ffffff;
@@ -30,6 +31,7 @@ body.theme-dark {
   --ok: #34d399;
   --warn: #fbbf24;
   --bad: #f87171;
+  --info: #60a5fa;
   --code-bg: #1f2937;
   --table-header: #1e293b;
   --input-bg: #0f172a;
@@ -48,6 +50,7 @@ button { cursor: pointer; background: var(--chip-bg); color: var(--chip-text); b
 .ok { color: var(--ok); font-weight: 600; }
 .warn { color: var(--warn); font-weight: 600; }
 .bad { color: var(--bad); font-weight: 600; }
+.info { color: var(--info); font-weight: 600; }
 .box { border: 1px dashed var(--border); border-radius: 8px; padding: 10px; background: var(--surface-alt); }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(260px,1fr)); gap: 12px; }
 .small { font-size: 12px; }

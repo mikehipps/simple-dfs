@@ -188,6 +188,7 @@ function download(filename, text) {
 function getAliases() { try { return JSON.parse(localStorage.getItem("csvMatchAliases") || "{}"); } catch { return {}; } }
 function setAliases(obj) { localStorage.setItem("csvMatchAliases", JSON.stringify(obj)); }
 
+
 // ---------- configuration ----------
 const REQUIRED_COLUMNS = {
   nfl: ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
@@ -261,6 +262,136 @@ function fillSelect(sel, headers) {
   sel.appendChild(opt("— choose —"));
   headers.forEach(h => sel.appendChild(opt(h)));
 }
+
+// Smart defaults for Step 2: Name Mode and Team selection
+function autoSelectNameAndTeamColumns(fileType, headers) {
+  const nameModeSelect = fileType === "A" ? nameModeA : nameModeB;
+  const nameComposeSelect = fileType === "A" ? nameACompose : nameBCompose;
+  const teamSelect = fileType === "A" ? teamA : teamB;
+  
+  // Always default to "Compose from Columns" mode
+  nameModeSelect.value = "compose";
+  toggleNameMode(fileType);
+  
+  // Auto-select name columns using exact matching first, then fuzzy matching
+  const selectedNameColumns = autoSelectNameColumns(headers);
+  if (selectedNameColumns.length > 0) {
+    // Clear current selection
+    Array.from(nameComposeSelect.options).forEach(option => option.selected = false);
+    
+    // Select the matched columns
+    selectedNameColumns.forEach(columnName => {
+      const option = Array.from(nameComposeSelect.options).find(opt => opt.value === columnName);
+      if (option) {
+        option.selected = true;
+      }
+    });
+    
+    // Add visual indicator for auto-selected name columns
+    addAutoSelectionIndicator(nameComposeSelect, "name");
+  }
+  
+  // Auto-select team column using exact matching first, then fuzzy matching
+  const selectedTeamColumn = autoSelectTeamColumn(headers);
+  if (selectedTeamColumn) {
+    teamSelect.value = selectedTeamColumn;
+    // Add visual indicator for auto-selected team column
+    addAutoSelectionIndicator(teamSelect, "team");
+  }
+}
+
+function autoSelectNameColumns(headers) {
+  const selectedColumns = [];
+  
+  // Exact match patterns for first name
+  const firstNameExactPatterns = ["FirstName", "First_Name", "first_name", "First Name", "first name", "First", "first"];
+  // Exact match patterns for last name
+  const lastNameExactPatterns = ["LastName", "Last_Name", "last_name", "Last Name", "last name", "Last", "last"];
+  
+  // Try exact matching first
+  let firstNameColumn = findExactMatch(headers, firstNameExactPatterns);
+  let lastNameColumn = findExactMatch(headers, lastNameExactPatterns);
+  
+  // If exact matching fails, try fuzzy matching
+  if (!firstNameColumn) {
+    firstNameColumn = findFuzzyMatch(headers, firstNameExactPatterns);
+  }
+  if (!lastNameColumn) {
+    lastNameColumn = findFuzzyMatch(headers, lastNameExactPatterns);
+  }
+  
+  // Add matched columns to selection
+  if (firstNameColumn) selectedColumns.push(firstNameColumn);
+  if (lastNameColumn) selectedColumns.push(lastNameColumn);
+  
+  return selectedColumns;
+}
+
+function autoSelectTeamColumn(headers) {
+  // Exact match patterns for team
+  const teamExactPatterns = ["Team", "team", "TEAM", "Tm", "tm", "TM"];
+  
+  // Try exact matching first
+  let teamColumn = findExactMatch(headers, teamExactPatterns);
+  
+  // If exact matching fails, try fuzzy matching
+  if (!teamColumn) {
+    teamColumn = findFuzzyMatch(headers, teamExactPatterns);
+  }
+  
+  return teamColumn;
+}
+
+function findExactMatch(headers, patterns) {
+  for (const pattern of patterns) {
+    const exactMatch = headers.find(header => header === pattern);
+    if (exactMatch) {
+      return exactMatch;
+    }
+  }
+  return null;
+}
+
+function findFuzzyMatch(headers, patterns) {
+  // Use Fuse.js for fuzzy matching
+  const fuse = new Fuse(headers, {
+    threshold: 0.3, // Lower threshold for more strict matching
+    includeScore: true
+  });
+  
+  let bestMatch = null;
+  let bestScore = 1; // Lower score is better
+  
+  for (const pattern of patterns) {
+    const results = fuse.search(pattern);
+    if (results.length > 0 && results[0].score < bestScore) {
+      bestMatch = results[0].item;
+      bestScore = results[0].score;
+    }
+  }
+  
+  // Only return if we have a reasonably good match
+  return bestScore < 0.4 ? bestMatch : null;
+}
+
+function addAutoSelectionIndicator(element, type) {
+  // Remove any existing indicators
+  const existingIndicator = element.parentNode.querySelector('.auto-selected-indicator');
+  if (existingIndicator) {
+    existingIndicator.remove();
+  }
+  
+  // Add new indicator
+  const indicator = document.createElement('span');
+  indicator.className = 'auto-selected-indicator';
+  indicator.textContent = ` (auto-selected ${type})`;
+  indicator.style.color = "#28a745";
+  indicator.style.fontSize = "0.9em";
+  indicator.style.fontWeight = "normal";
+  indicator.style.marginLeft = "4px";
+  
+  element.parentNode.appendChild(indicator);
+}
 function fillMultiSelect(sel, headers) {
   sel.innerHTML = "";
   headers.forEach(h => {
@@ -271,6 +402,31 @@ function fillRequiredMapping(headers) {
   requiredMapping.innerHTML = "";
   const sport = sportSelect.value;
   const requiredCols = REQUIRED_COLUMNS[sport] || [];
+  
+  // Auto-select logic: find exact matches between headers and required columns
+  // Consider both sheets A and B separately for auto-selection
+  const autoSelected = {};
+  
+  requiredCols.forEach(colName => {
+    // Count exact matches in Sheet A headers (case-sensitive, space-sensitive)
+    const exactMatchesA = headersA.filter(h => h === colName);
+    // Count exact matches in Sheet B headers (case-sensitive, space-sensitive)
+    const exactMatchesB = headersB.filter(h => h === colName);
+    
+    // Auto-select logic:
+    // - Auto-select if exactly one sheet has the exact match and the other doesn't
+    // - Don't auto-select if both sheets have the exact same column name (ambiguous)
+    // - Don't auto-select if no exact matches exist
+    if (exactMatchesA.length === 1 && exactMatchesB.length === 0) {
+      // Only Sheet A has exact match - auto-select from Sheet A
+      autoSelected[colName] = exactMatchesA[0];
+    } else if (exactMatchesB.length === 1 && exactMatchesA.length === 0) {
+      // Only Sheet B has exact match - auto-select from Sheet B
+      autoSelected[colName] = exactMatchesB[0];
+    }
+    // If both sheets have exact match (exactMatchesA.length > 0 && exactMatchesB.length > 0), don't auto-select
+    // If no exact matches exist, don't auto-select
+  });
   
   requiredCols.forEach(colName => {
     const label = document.createElement("label");
@@ -293,6 +449,20 @@ function fillRequiredMapping(headers) {
       opt.textContent = h;
       select.appendChild(opt);
     });
+    
+    // Auto-select if condition met
+    if (autoSelected[colName]) {
+      select.value = autoSelected[colName];
+      columnMapping.required[colName] = autoSelected[colName];
+      
+      // Add visual indicator for auto-selected columns
+      const indicator = document.createElement("span");
+      indicator.textContent = " (auto-selected)";
+      indicator.style.color = "#28a745";
+      indicator.style.fontSize = "0.9em";
+      indicator.style.fontWeight = "normal";
+      label.appendChild(indicator);
+    }
     
     select.addEventListener("change", () => {
       columnMapping.required[colName] = select.value;
@@ -406,6 +576,12 @@ function toggleNameMode(which) {
 nameModeA.addEventListener("change", () => toggleNameMode("A"));
 nameModeB.addEventListener("change", () => toggleNameMode("B"));
 
+// Set default name mode to "Compose from Columns" for both files
+nameModeA.value = "compose";
+nameModeB.value = "compose";
+toggleNameMode("A");
+toggleNameMode("B");
+
 fileA.addEventListener("change", e => {
   const f = e.target.files[0]; if (!f) return;
   parseCSV(f, (err, res) => {
@@ -415,6 +591,8 @@ fileA.addEventListener("change", e => {
     fillSelect(nameA, headersA); fillSelect(teamA, headersA);
     fillMultiSelect(nameACompose, headersA);
     fillRequiredMapping([...headersA, ...headersB]);
+    // Auto-select name and team columns for File A
+    autoSelectNameAndTeamColumns("A", headersA);
   });
 });
 fileB.addEventListener("change", e => {
@@ -426,6 +604,8 @@ fileB.addEventListener("change", e => {
     fillSelect(nameB, headersB); fillSelect(teamB, headersB);
     fillMultiSelect(nameBCompose, headersB);
     fillRequiredMapping([...headersA, ...headersB]);
+    // Auto-select name and team columns for File B
+    autoSelectNameAndTeamColumns("B", headersB);
   });
 });
 
@@ -468,7 +648,7 @@ function buildIndex(rows, getName, teamCol) {
   for (const [t, arr] of byTeam.entries()) {
     fuseByTeam.set(t, new Fuse(arr, { keys: ["_norm_name"], threshold: 0.12, includeScore: true }));
   }
-  return { items, map, fuseByTeam };
+  return { items, map, fuseByTeam, byTeam };
 }
 
 // Remove old gatherKeep function - no longer needed
@@ -653,3 +833,139 @@ loadDataSeeds(sportSelect.value);
 if (addOptionalColumn) {
   addOptionalColumn.addEventListener("click", addOptionalDropdown);
 }
+
+// Test function for auto-selection logic (for debugging)
+function testAutoSelectionLogic() {
+  console.log("Testing auto-selection logic...");
+  
+  // Test scenarios
+  const testCases = [
+    {
+      name: "Sheet A has 'Position', Sheet B has 'positions'",
+      headersA: ["Position", "First Name"],
+      headersB: ["positions", "First Name"],
+      expectedAutoSelected: {
+        "Position": "Position" // Should auto-select from Sheet A
+      }
+    },
+    {
+      name: "Sheet A has 'Position', Sheet B has 'Position'",
+      headersA: ["Position", "First Name"],
+      headersB: ["Position", "First Name"],
+      expectedAutoSelected: {} // Should NOT auto-select (ambiguous)
+    },
+    {
+      name: "Sheet A has 'Position', Sheet B has 'Pos'",
+      headersA: ["Position", "First Name"],
+      headersB: ["Pos", "First Name"],
+      expectedAutoSelected: {} // Should NOT auto-select (not exact match)
+    },
+    {
+      name: "Sheet A has no match, Sheet B has 'Position'",
+      headersA: ["First Name"],
+      headersB: ["Position", "First Name"],
+      expectedAutoSelected: {
+        "Position": "Position" // Should auto-select from Sheet B
+      }
+    }
+  ];
+  
+  testCases.forEach((testCase, index) => {
+    console.log(`Test ${index + 1}: ${testCase.name}`);
+    
+    // Simulate the auto-selection logic
+    const requiredCols = ["Position", "First Name", "Last Name"];
+    const autoSelected = {};
+    
+    requiredCols.forEach(colName => {
+      const exactMatchesA = testCase.headersA.filter(h => h === colName);
+      const exactMatchesB = testCase.headersB.filter(h => h === colName);
+      
+      if (exactMatchesA.length === 1 && exactMatchesB.length === 0) {
+        autoSelected[colName] = exactMatchesA[0];
+      } else if (exactMatchesB.length === 1 && exactMatchesA.length === 0) {
+        autoSelected[colName] = exactMatchesB[0];
+      }
+    });
+    
+    // Check if results match expected
+    const passed = JSON.stringify(autoSelected) === JSON.stringify(testCase.expectedAutoSelected);
+    console.log(`  Expected:`, testCase.expectedAutoSelected);
+    console.log(`  Got:`, autoSelected);
+    console.log(`  ${passed ? "✓ PASS" : "✗ FAIL"}`);
+  });
+}
+
+// Uncomment the line below to run tests in browser console
+// testAutoSelectionLogic();
+
+// Test function for Step 2 smart defaults (for debugging)
+function testStep2SmartDefaults() {
+  console.log("Testing Step 2 smart defaults...");
+  
+  // Test scenarios for name and team column matching
+  const testCases = [
+    {
+      name: "Standard column names",
+      headers: ["FirstName", "LastName", "Team", "Position", "Salary"],
+      expectedNameColumns: ["FirstName", "LastName"],
+      expectedTeamColumn: "Team"
+    },
+    {
+      name: "Underscore column names",
+      headers: ["first_name", "last_name", "team", "position", "salary"],
+      expectedNameColumns: ["first_name", "last_name"],
+      expectedTeamColumn: "team"
+    },
+    {
+      name: "Space separated column names",
+      headers: ["First Name", "Last Name", "Team", "Position", "Salary"],
+      expectedNameColumns: ["First Name", "Last Name"],
+      expectedTeamColumn: "Team"
+    },
+    {
+      name: "Mixed case column names",
+      headers: ["FIRSTNAME", "LASTNAME", "TEAM", "POSITION", "SALARY"],
+      expectedNameColumns: ["FIRSTNAME", "LASTNAME"],
+      expectedTeamColumn: "TEAM"
+    },
+    {
+      name: "Fuzzy matching fallback",
+      headers: ["First", "Last", "Tm", "Pos", "Sal"],
+      expectedNameColumns: ["First", "Last"],
+      expectedTeamColumn: "Tm"
+    },
+    {
+      name: "No matches found",
+      headers: ["Player", "Pos", "Sal", "Opp"],
+      expectedNameColumns: [],
+      expectedTeamColumn: null
+    }
+  ];
+  
+  testCases.forEach((testCase, index) => {
+    console.log(`Test ${index + 1}: ${testCase.name}`);
+    
+    // Test name column selection
+    const selectedNameColumns = autoSelectNameColumns(testCase.headers);
+    const namePassed = JSON.stringify(selectedNameColumns) === JSON.stringify(testCase.expectedNameColumns);
+    
+    // Test team column selection
+    const selectedTeamColumn = autoSelectTeamColumn(testCase.headers);
+    const teamPassed = selectedTeamColumn === testCase.expectedTeamColumn;
+    
+    console.log(`  Headers:`, testCase.headers);
+    console.log(`  Expected Name Columns:`, testCase.expectedNameColumns);
+    console.log(`  Got Name Columns:`, selectedNameColumns);
+    console.log(`  Expected Team Column:`, testCase.expectedTeamColumn);
+    console.log(`  Got Team Column:`, selectedTeamColumn);
+    console.log(`  Name Selection: ${namePassed ? "✓ PASS" : "✗ FAIL"}`);
+    console.log(`  Team Selection: ${teamPassed ? "✓ PASS" : "✗ FAIL"}`);
+    console.log(`  Overall: ${namePassed && teamPassed ? "✓ PASS" : "✗ FAIL"}`);
+    console.log("---");
+  });
+}
+
+// Uncomment the line below to run tests in browser console
+// testStep2SmartDefaults();
+
