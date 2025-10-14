@@ -270,9 +270,7 @@ function getAvailableSheet2Teams(teamsB) {
 
 
 // ---------- configuration ----------
-const REQUIRED_COLUMNS = {
-  nfl: ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator']
-};
+const REQUIRED_COLUMNS = ['Id', 'Position', 'First Name', 'Last Name', 'FPPG', 'Game', 'Team', 'Opponent', 'Salary', 'Injury Indicator'];
 
 const OPTIONAL_COLUMNS = ['Max Exposure', 'Min Exposure', 'Roster Order', 'Projected Ownership', 'Min Deviation', 'Max Deviation', 'Projection Floor', 'Projection Ceil', 'Confirmed Starter', 'Progressive Scale'];
 
@@ -492,8 +490,7 @@ function fillMultiSelect(sel, headers) {
 }
 function fillRequiredMapping(headers) {
   requiredMapping.innerHTML = "";
-  const sport = sportSelect.value;
-  const requiredCols = REQUIRED_COLUMNS[sport] || [];
+  const requiredCols = REQUIRED_COLUMNS;
   
   // Auto-select logic: find exact matches between headers and required columns
   // Consider both sheets A and B separately for auto-selection
@@ -640,8 +637,7 @@ function addOptionalDropdown() {
 }
 
 function validateRequiredMapping() {
-  const sport = sportSelect.value;
-  const requiredCols = REQUIRED_COLUMNS[sport] || [];
+  const requiredCols = REQUIRED_COLUMNS;
   
   for (const col of requiredCols) {
     if (!columnMapping.required[col]) {
@@ -1065,8 +1061,7 @@ document.getElementById("btnMerge").addEventListener("click", () => {
     const out = {};
     
     // Map required columns
-    const sport = sportSelect.value;
-    const requiredCols = REQUIRED_COLUMNS[sport] || [];
+    const requiredCols = REQUIRED_COLUMNS;
     requiredCols.forEach(colName => {
       const sourceCol = columnMapping.required[colName];
       if (sourceCol) {
