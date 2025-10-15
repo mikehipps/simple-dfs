@@ -327,7 +327,7 @@ def generate_lineups_dynamic():
     
     try:
         # For non-football sports (HOCKEY, BASKETBALL), use the original CSV directly to avoid position conversion issues
-        if SPORT_TYPE.upper() in ["HOCKEY", "BASKETBALL"]:
+        if SPORT_TYPE.upper() in ["HOCKEY", "BASKETBALL", "FOOTBALL"]:
             processed_csv = CSV_FILE
             random_values_dict = {}
             logger.info(f"Using original {SPORT_TYPE} CSV file directly: {CSV_FILE}")
