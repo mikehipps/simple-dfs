@@ -326,13 +326,13 @@ def generate_lineups_dynamic():
     process_start_time = time.time()
     
     try:
-        # For NHL, use the original CSV directly to avoid position conversion issues
-        if SPORT_TYPE.upper() == "HOCKEY":
+        # For non-football sports (HOCKEY, BASKETBALL), use the original CSV directly to avoid position conversion issues
+        if SPORT_TYPE.upper() in ["HOCKEY", "BASKETBALL"]:
             processed_csv = CSV_FILE
             random_values_dict = {}
-            logger.info(f"Using original NHL CSV file directly: {CSV_FILE}")
+            logger.info(f"Using original {SPORT_TYPE} CSV file directly: {CSV_FILE}")
         else:
-            # Preprocess the CSV file for other sports
+            # Preprocess the CSV file for other sports (currently only FOOTBALL)
             processed_csv, random_values_dict = preprocess_csv(CSV_FILE)
         
         # Create dynamic work queue with exact batch calculation
