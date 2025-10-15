@@ -142,8 +142,6 @@ def get_budget_from_sport():
     Get budget constraint dynamically from pydfs settings classes
     based on SPORT_TYPE configuration
     """
-    from pydfs_lineup_optimizer.sites.fanduel.classic import settings
-    
     sport_type = SPORT_TYPE.upper()
     
     # Dynamically construct the class name
