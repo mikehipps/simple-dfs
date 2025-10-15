@@ -32,8 +32,6 @@ from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
 from custom_random_strategy import CustomRandomFantasyPointsStrategy
 
-# Import CSV processing from dedicated module
-from csv_processor import preprocess_csv
 
 
 # Import configuration from external file
@@ -274,8 +272,10 @@ def generate_lineups_dynamic():
     process_start_time = time.time()
     
     try:
-        # Preprocess the CSV file
-        processed_csv, random_values_dict = preprocess_csv(CSV_FILE)
+        # Always use the original CSV file directly
+        processed_csv = CSV_FILE
+        random_values_dict = {}
+        logger.info(f"Using original NFL CSV file directly: {CSV_FILE}")
         
         # Create dynamic work queue with exact batch calculation
         work_queue, total_batches = create_work_queue(TOTAL_LINEUPS, LINEUPS_PER_BATCH)

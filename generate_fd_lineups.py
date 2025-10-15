@@ -32,8 +32,6 @@ from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
 from pydfs_lineup_optimizer.sites.fanduel.classic import settings
 from custom_random_strategy import CustomRandomFantasyPointsStrategy
 
-# Import CSV processing from dedicated module
-from csv_processor import preprocess_csv
 
 
 # Import configuration from external file
@@ -326,14 +324,10 @@ def generate_lineups_dynamic():
     process_start_time = time.time()
     
     try:
-        # For non-football sports (HOCKEY, BASKETBALL), use the original CSV directly to avoid position conversion issues
-        if SPORT_TYPE.upper() in ["HOCKEY", "BASKETBALL", "FOOTBALL"]:
-            processed_csv = CSV_FILE
-            random_values_dict = {}
-            logger.info(f"Using original {SPORT_TYPE} CSV file directly: {CSV_FILE}")
-        else:
-            # Preprocess the CSV file for other sports (currently only FOOTBALL)
-            processed_csv, random_values_dict = preprocess_csv(CSV_FILE)
+        # Always use the original CSV file directly
+        processed_csv = CSV_FILE
+        random_values_dict = {}
+        logger.info(f"Using original {SPORT_TYPE} CSV file directly: {CSV_FILE}")
         
         # Create dynamic work queue with exact batch calculation
         work_queue, total_batches = create_work_queue(TOTAL_LINEUPS, LINEUPS_PER_BATCH)
