@@ -18,6 +18,6 @@ ENABLE_RANDOM = True        # When True, uses RandomFantasyPointsStrategy with M
                             # When False, uses standard projection-based optimization
                             
 # File Configuration
-CSV_FILE = "projections-csv/nhl1014.csv"   
+CSV_FILE = "projections-csv/nhl1015.csv"   
 SPORT_TYPE = "HOCKEY" 
 OUTPUT_PREFIX = "fd-lineups"
