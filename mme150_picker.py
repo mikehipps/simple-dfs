@@ -6,7 +6,7 @@ Running this script behaves the same as:
     python fd_mme_picker.py --sport nfl
 """
 
-from fd_mme_picker import main
+from mme_picker.core import main
 
 
 if __name__ == "__main__":

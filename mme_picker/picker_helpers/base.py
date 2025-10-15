@@ -122,8 +122,8 @@ class PickerHelper(ABC):
 
 def get_registered_helpers() -> Dict[str, PickerHelper]:
     """Runtime import to avoid circular references."""
-    from picker_helpers.nfl import NFLPickerHelper  # noqa: WPS433
-    from picker_helpers.nhl import NHLPickerHelper  # noqa: WPS433
+    from .nfl import NFLPickerHelper  # noqa: WPS433
+    from .nhl import NHLPickerHelper  # noqa: WPS433
 
     helpers: Dict[str, PickerHelper] = {}
     for helper in (NFLPickerHelper(), NHLPickerHelper()):
