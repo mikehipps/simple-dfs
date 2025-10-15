@@ -43,7 +43,7 @@ try:
         LINEUPS_PER_BATCH,
         MAX_EXPOSURE,
         MAX_REPEATING_PLAYERS,
-        MIN_SALARY,
+        MIN_SALARY_OFFSET,
         CSV_FILE,
         SPORT_TYPE,
         OUTPUT_PREFIX,
@@ -136,6 +136,36 @@ def get_sport_from_config():
         return Sport.FOOTBALL
 
 
+def get_budget_from_sport():
+    """
+    Get budget constraint from pydfs settings based on SPORT_TYPE
+    
+    Returns:
+        int: The budget for the specified sport
+    """
+    budget_mapping = {
+        "FOOTBALL": 60000,
+        "BASKETBALL": 60000,
+        "HOCKEY": 55000,
+        "BASEBALL": 35000,
+        "WNBA": 40000,
+        "NASCAR": 50000,
+        "MMA": 100,
+        "GOLF": 60000,  # Default for sports not explicitly listed
+        "SOCCER": 60000,
+        "TENNIS": 60000,
+        "LEAGUE_OF_LEGENDS": 60000
+    }
+    
+    sport_type = SPORT_TYPE.upper()
+    if sport_type in budget_mapping:
+        return budget_mapping[sport_type]
+    else:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Unknown sport type '{SPORT_TYPE}'. Defaulting to 60000 budget.")
+        return 60000
+
+
 def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict, work_queue, 
                                    file_lock, all_lineups, total_batches, process_start_time):
     """
@@ -176,12 +206,16 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         logger.info(f"Thread {thread_id}: Loading players from CSV")
         optimizer.load_players_from_csv(processed_csv)
         
+        # Get budget and calculate min salary using offset
+        budget = get_budget_from_sport()
+        min_salary = int(budget * (1 - MIN_SALARY_OFFSET))
+        
         # Apply constraints
         optimizer.set_max_repeating_players(MAX_REPEATING_PLAYERS)
-        optimizer.set_min_salary_cap(MIN_SALARY)
+        optimizer.set_min_salary_cap(min_salary)
         
         logger.info(f"Thread {thread_id}: Active constraints - "
-                   f"Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY}), "
+                   f"Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${min_salary}), "
                    f"MIP Solver, "
                    f"Random Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
         
@@ -320,7 +354,10 @@ def generate_lineups_dynamic():
         logger.info(f"Target: {TOTAL_LINEUPS} total lineups using dynamic queue system")
         logger.info(f"Configuration: {total_batches} batches × {LINEUPS_PER_BATCH} lineups = {TOTAL_LINEUPS} lineups exactly")
         logger.info(f"Using MIP Solver with {'CustomRandomFantasyPointsStrategy' if ENABLE_RANDOM else 'default optimizer strategy'}")
-        logger.info(f"Active constraints: Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${MIN_SALARY})")
+        # Calculate min salary for logging
+        budget = get_budget_from_sport()
+        min_salary = int(budget * (1 - MIN_SALARY_OFFSET))
+        logger.info(f"Active constraints: Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${min_salary})")
         logger.info(f"Custom Random Fantasy Points Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
         logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
