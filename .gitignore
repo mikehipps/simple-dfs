@@ -72,3 +72,4 @@ autoMME/mme150-2025-10-12-11-28_summary.txt
 .~lock*.csv#
 inputs.py
 fd_inputs.py
+autoNHL/nhl1014_summary.txt

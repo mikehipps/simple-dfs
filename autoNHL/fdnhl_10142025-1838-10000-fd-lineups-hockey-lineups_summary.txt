@@ -1,0 +1,25 @@
+NHL picker selected 150/150 lineups (pool before=10000, after=5135).
+Pruned 4865 lineups (101 low-usage players < 4.00%).
+Exposure cap 40.0% → 60 lineups, overlap 5 → 5 (relaxed 0x).
+Projection avg 117.19, median 117.35, range 108.60-126.30.
+Average correlation score 2.057 (weights: proj=0.55, corr=0.40, uniq=0.25, chalk=0.20).
+Max stack sizes seen: 4-man:10, 3-man:88, 2-man:52.
+Goalie conflicts: 3 skaters across 3 lineups.
+Cross-game mini-stacks: 191 total instances.
+Top exposures (selected% | pool% | Δ | POS | TEAM | player [id] | proj | own):
+   39.3% |   9.4% | +29.9 | D   | NSH | Justin Barron [121591-149590] |  6.60
+   32.0% |  26.3% |  +5.7 | C   | TOR | Auston Matthews [121591-70899] | 19.60
+   26.0% |  28.8% |  -2.8 | D   | TOR | Morgan Rielly [121591-37881] | 12.60
+   24.0% |  19.0% |  +5.0 | W   | CAR | Nikolaj Ehlers [121591-58907] | 15.80
+   20.0% |  15.1% |  +4.9 | W   | CAR | Seth Jarvis [121591-146131] | 15.50
+   20.0% |  17.1% |  +2.9 | D   | NSH | Roman Josi [121591-12262] | 13.40
+   18.7% |  16.8% |  +1.8 | C   | CAR | Logan Stankoven [121591-161913] | 11.50
+   18.7% |  12.6% |  +6.0 | W   | NSH | Filip Forsberg [121591-39253] | 15.70
+   16.7% |  18.8% |  -2.2 | C   | ANH | Mason McTavish [121591-159629] | 13.50
+   16.0% |  13.2% |  +2.8 | G   | VGK | Adin Hill [121591-66612] | 15.50
+   15.3% |  13.4% |  +1.9 | W   | SJ  | Tyler Toffoli [121591-12624] | 13.20
+   15.3% |  21.2% |  -5.9 | W   | PIT | Rickard Rakell [121591-15269] | 14.50
+Outputs:
+  Selected lineups → autoNHL/fdnhl_10142025-1838-10000-fd-lineups-hockey-lineups_selected_lineups.csv
+  Usage report     → autoNHL/fdnhl_10142025-1838-10000-fd-lineups-hockey-lineups_usage_report.csv
+  Summary          → autoNHL/fdnhl_10142025-1838-10000-fd-lineups-hockey-lineups_summary.txt

@@ -1,24 +1,25 @@
-NHL picker selected 150/150 lineups (pool before=10000, after=5135).
-Pruned 4865 lineups (101 low-usage players < 4.00%).
-Exposure cap 40.0% → 60 lineups, overlap 5 → 5 (relaxed 0x).
-Projection avg 117.19, median 117.35, range 108.60-126.30.
-Average correlation score 2.057 (weights: proj=0.55, corr=0.40, uniq=0.25, chalk=0.20).
-Max stack sizes seen: 4-man:10, 3-man:88, 2-man:52.
-Goalie conflicts: 3 skaters across 3 lineups.
-Cross-game mini-stacks: 191 total instances.
+NHL picker selected 20/20 lineups (pool before=10000, after=4717).
+Pruned 5283 lineups (101 low-usage players < 4.00%).
+Exposure cap 40.0% → 8 lineups, overlap 5 → 5 (relaxed 0x).
+Projection avg 114.97, median 116.75, range 100.90-123.20.
+Average correlation score 2.185 (weights: proj=0.55, corr=0.40, uniq=0.25, chalk=0.20).
+Max stack sizes seen: 4-man:2, 3-man:15, 2-man:3.
+Goalie conflicts: 1 skaters across 1 lineups.
+Cross-game mini-stacks: 23 total instances.
+Players at cap (2): 121591-97102, 121591-104015
 Top exposures (selected% | pool% | Δ | POS | TEAM | player [id] | proj | own):
-   39.3% |   9.4% | +29.9 | D   | NSH | Justin Barron [121591-149590] |  6.60
-   32.0% |  26.3% |  +5.7 | C   | TOR | Auston Matthews [121591-70899] | 19.60
-   26.0% |  28.8% |  -2.8 | D   | TOR | Morgan Rielly [121591-37881] | 12.60
-   24.0% |  19.0% |  +5.0 | W   | CAR | Nikolaj Ehlers [121591-58907] | 15.80
-   20.0% |  15.1% |  +4.9 | W   | CAR | Seth Jarvis [121591-146131] | 15.50
-   20.0% |  17.1% |  +2.9 | D   | NSH | Roman Josi [121591-12262] | 13.40
-   18.7% |  16.8% |  +1.8 | C   | CAR | Logan Stankoven [121591-161913] | 11.50
-   18.7% |  12.6% |  +6.0 | W   | NSH | Filip Forsberg [121591-39253] | 15.70
-   16.7% |  18.8% |  -2.2 | C   | ANH | Mason McTavish [121591-159629] | 13.50
-   16.0% |  13.2% |  +2.8 | G   | VGK | Adin Hill [121591-66612] | 15.50
-   15.3% |  13.4% |  +1.9 | W   | SJ  | Tyler Toffoli [121591-12624] | 13.20
-   15.3% |  21.2% |  -5.9 | W   | PIT | Rickard Rakell [121591-15269] | 14.50
+   40.0% |  19.8% | +20.2 | G   | ANH | Lukas Dostal [121591-97102] | 16.30
+   40.0% |  54.4% | -14.4 | G   | NYR | Igor Shesterkin [121591-104015] | 14.10
+   35.0% |   4.3% | +30.7 | D   | NSH | Justin Barron [121591-149590] |  6.60
+   35.0% |  33.0% |  +2.0 | C   | TOR | Auston Matthews [121591-70899] | 19.60
+   30.0% |  27.6% |  +2.4 | D   | TOR | Morgan Rielly [121591-37881] | 12.60
+   25.0% |  19.9% |  +5.1 | C   | EDM | Connor McDavid [121591-64102] | 18.50
+   25.0% |  13.0% | +12.0 | W   | NSH | Filip Forsberg [121591-39253] | 15.70
+   25.0% |  18.6% |  +6.4 | D   | NSH | Roman Josi [121591-12262] | 13.40
+   25.0% |  10.0% | +15.0 | C   | NSH | Ryan O'Reilly [121591-9124] | 10.20
+   20.0% |   8.8% | +11.2 | C   | NYR | J.T. Miller [121591-15360] | 12.90
+   20.0% |   8.9% | +11.1 | W   | NSH | Steven Stamkos [121591-8655] | 11.70
+   20.0% |  13.0% |  +7.0 | C   | SEA | Matty Beniers [121591-169115] | 11.30
 Outputs:
   Selected lineups → autoNHL/nhl1014_selected_lineups.csv
   Usage report     → autoNHL/nhl1014_usage_report.csv

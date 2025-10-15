@@ -12,7 +12,9 @@ player-usage uniqueness, then greedily builds a capped-exposure set.
 
 import argparse
 import csv
+import glob
 import math
+import os
 import random
 import statistics
 from collections import Counter
@@ -82,6 +84,116 @@ def extract_player_name(cell: object) -> str:
     cell_str = str(cell)
     idx = cell_str.rfind("(")
     return cell_str[:idx].strip() if idx > 0 else cell_str.strip()
+
+
+def _prompt_path_with_completion(prompt_text: str, default: Optional[str] = None) -> str:
+    """
+    Prompt for a filesystem path with basic tab completion support.
+    Returns the entered string (may be empty).
+    """
+    try:
+        import readline  # type: ignore
+        old_completer = readline.get_completer()
+        try:
+            old_delims = readline.get_completer_delims()
+        except AttributeError:
+            old_delims = " \t\n"
+
+        def completer(text: str, state: int) -> Optional[str]:
+            expanded = os.path.expanduser(text or "")
+            matches = sorted(glob.glob(expanded + "*"))
+            if state < len(matches):
+                candidate = matches[state]
+                if os.path.isdir(candidate):
+                    candidate += os.sep
+                return candidate
+            return None
+
+        readline.set_completer_delims(" \t\n")
+        readline.parse_and_bind("tab: complete")
+        readline.set_completer(completer)
+        try:
+            value = input(prompt_text).strip()
+        finally:
+            readline.set_completer(old_completer)
+            try:
+                readline.set_completer_delims(old_delims)
+            except AttributeError:
+                pass
+        if not value and default:
+            return default
+        return value
+    except (ImportError, AttributeError):
+        value = input(prompt_text).strip()
+        if not value and default:
+            return default
+        return value
+
+
+def _browse_for_file(
+    title: str,
+    default_dir: Optional[str],
+    filetypes: Optional[Sequence[Tuple[str, str]]],
+) -> str:
+    """Open a GUI file picker if available; return the chosen path or empty string."""
+    try:
+        import tkinter as tk
+        from tkinter.filedialog import askopenfilename
+    except Exception:
+        return ""
+
+    root = tk.Tk()
+    root.withdraw()
+    options = {"title": title}
+    if default_dir:
+        options["initialdir"] = os.path.expanduser(default_dir)
+    if filetypes:
+        options["filetypes"] = list(filetypes)
+    try:
+        path = askopenfilename(**options) or ""
+    finally:
+        try:
+            root.update()
+        except Exception:
+            pass
+        root.destroy()
+    return path
+
+
+def prompt_for_existing_file(
+    label: str,
+    *,
+    default_dir: Optional[str] = None,
+    filetypes: Optional[Sequence[Tuple[str, str]]] = None,
+) -> str:
+    """
+    Prompt repeatedly until a valid file path is provided.
+    Supports tab completion and optional GUI file picker by pressing Enter on an empty prompt.
+    """
+    prompt_text = f"{label} (Tab to autocomplete; Enter for picker): "
+    while True:
+        typed = _prompt_path_with_completion(prompt_text)
+        if not typed:
+            typed = _browse_for_file(label, default_dir, filetypes)
+            if not typed:
+                print("No file selected; please try again.")
+                continue
+        path = Path(os.path.expanduser(typed)).expanduser()
+        if path.exists():
+            return str(path)
+        print(f"Path not found: {path}. Please try again.")
+
+
+def resolve_csv_path(initial: Optional[str], label: str, default_dir: Optional[str]) -> Path:
+    csv_types: Tuple[Tuple[str, str], ...] = (("CSV files", "*.csv"), ("All files", "*.*"))
+    if initial:
+        candidate = Path(initial).expanduser()
+        if candidate.exists():
+            return candidate
+        print(f"{label} not found at {candidate}.")
+    print(f"{label} not provided; please select a file.")
+    chosen = prompt_for_existing_file(label, default_dir=default_dir, filetypes=csv_types)
+    return Path(chosen).expanduser()
 
 
 def load_lineups(lineup_csv: Path) -> Tuple[pd.DataFrame, List[str]]:
@@ -467,6 +579,8 @@ def greedy_select(
             for pid in lineup.players_id:
                 counts[pid] = counts.get(pid, 0) + 1
             stalled = 0
+            if len(selected) % 10 == 0 or len(selected) == n_target:
+                print(f"  Selected {len(selected)}/{n_target} lineups…")
         else:
             stalled += 1
             if stalled_threshold > 0 and stalled >= stalled_threshold and max_repeat < max_repeat_limit:
@@ -490,36 +604,36 @@ def greedy_select(
     return selected, counts, diag
 
 
-def export_selected_lineups(lineups_df: pd.DataFrame, selected: Sequence[Lineup], output_csv: Path) -> None:
+def export_selected_lineups(
+    lineups_df: pd.DataFrame,
+    roster_cols: Sequence[str],
+    selected: Sequence[Lineup],
+    output_csv: Path,
+) -> None:
     if not selected:
         return
     indices = [lu.idx for lu in selected]
-    subset = lineups_df.iloc[indices].copy()
-    subset.reset_index(drop=True, inplace=True)
-    
-    # Clean position headers: remove ".1" notation
-    cleaned_columns = {}
-    for col in subset.columns:
-        if col is None:
-            continue
-        col_str = str(col)
-        # Remove ".1" notation from position headers
-        if col_str.endswith('.1'):
-            cleaned_columns[col] = col_str[:-2]
-        else:
-            cleaned_columns[col] = col_str
-    
-    # Rename columns with cleaned position headers
-    subset.rename(columns=cleaned_columns, inplace=True)
-    
-    # Extract player IDs only for roster columns
-    roster_cols = [col for col in subset.columns if col.upper() not in NON_ROSTER_LABELS and not str(col).startswith("Unnamed")]
+    subset = lineups_df.iloc[indices].copy().reset_index(drop=True)
+
+    # Normalize roster columns to player IDs for FanDuel upload format
     for col in roster_cols:
         if col in subset.columns:
             subset[col] = subset[col].apply(extract_player_id)
-    
+
+    # Build headers that mimic the FanDuel template (duplicate slot labels)
+    display_headers: List[str] = []
+    for col in subset.columns:
+        col_str = str(col)
+        if "." in col_str and col_str.split(".", 1)[0].upper() not in NON_ROSTER_LABELS:
+            display_headers.append(col_str.split(".", 1)[0])
+        else:
+            display_headers.append(col_str)
+
     output_csv.parent.mkdir(parents=True, exist_ok=True)
-    subset.to_csv(output_csv, index=False)
+    with output_csv.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(display_headers)
+        writer.writerows(subset.to_numpy())
 
 
 def export_usage_report(
@@ -571,8 +685,8 @@ def export_usage_report(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pick an exposure-balanced FanDuel NHL lineup set.")
-    parser.add_argument("lineup_csv", help="CSV of candidate lineups (FanDuel export).")
-    parser.add_argument("projections_csv", help="Matched projections CSV for the slate.")
+    parser.add_argument("lineup_csv", nargs="?", default=None, help="CSV of candidate lineups (FanDuel export).")
+    parser.add_argument("projections_csv", nargs="?", default=None, help="Matched projections CSV for the slate.")
     parser.add_argument("--n", type=int, default=DEFAULT_N_TARGET, help="How many lineups to select (default 150).")
     parser.add_argument("--cap", type=float, default=DEFAULT_CAP_PCT, help="Max exposure per player in percent (default 40).")
     parser.add_argument("--max-repeat", type=int, default=DEFAULT_MAX_REPEAT_INIT, help="Initial max shared players between two chosen lineups.")
@@ -593,20 +707,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    lineup_path = Path(args.lineup_csv).expanduser()
-    proj_path = Path(args.projections_csv).expanduser()
-    if not lineup_path.exists():
-        raise FileNotFoundError(f"Lineup CSV not found: {lineup_path}")
-    if not proj_path.exists():
-        raise FileNotFoundError(f"Projections CSV not found: {proj_path}")
+    lineup_path = resolve_csv_path(args.lineup_csv, "Lineup CSV", "lineups")
+    proj_path = resolve_csv_path(args.projections_csv, "Projections CSV", "projections-csv")
+    print(f"Loading lineup pool from {lineup_path}…")
+    print(f"Loading projections from {proj_path}…")
 
     lineups_df, roster_cols = load_lineups(lineup_path)
+    print(f"Loaded {len(lineups_df)} candidate lineups with roster columns {roster_cols}.")
     pool_before = len(lineups_df)
     usage_map = compute_pool_usage(lineups_df, roster_cols)
     min_usage_frac = max(0.0, args.min_usage_pct / 100.0) if args.min_usage_pct else 0.0
     prune_stats: Optional[Dict[str, int]] = None
     low_players: Set[str] = set()
     if min_usage_frac > 0.0:
+        print(f"Pruning lineups using players below {args.min_usage_pct:.2f}% pool usage…")
         lineups_df, prune_stats, low_players = prune_lineups(lineups_df, roster_cols, usage_map, min_usage_frac)
         usage_map = compute_pool_usage(lineups_df, roster_cols)
     else:
@@ -615,10 +729,12 @@ def main() -> None:
         raise ValueError("No candidate lineups remain after pruning.")
 
     text_map = build_player_text_map(lineups_df, roster_cols)
+    print("Building projection + metadata maps…")
     proj_df, id_col, proj_col, pos_col, team_col, opp_col, name_col, game_col, own_col = load_projections(proj_path)
     proj_map, pos_map, team_map, opp_map, name_map, game_map, ownership_map = build_player_maps(
         proj_df, id_col, proj_col, pos_col, team_col, opp_col, name_col, game_col, own_col
     )
+    print("Constructing lineup objects for scoring…")
     lineup_objects = make_lineup_objects(
         lineups_df, roster_cols, proj_map, pos_map, team_map, opp_map, game_map, ownership_map, usage_map
     )
@@ -626,6 +742,7 @@ def main() -> None:
         raise ValueError("Failed to build lineup objects from the pool.")
 
     weights = (args.w_proj, args.w_corr, args.w_uniq, args.w_chalk)
+    print("Running greedy lineup selection…")
     selected, counts, diag = greedy_select(
         lineup_objects,
         n_target=args.n,
@@ -640,6 +757,7 @@ def main() -> None:
     )
     if not selected:
         raise RuntimeError("Selector could not find any lineups under the given constraints.")
+    print(f"Selected {len(selected)} lineups (target {args.n}).")
 
     out_dir = Path(args.out_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -648,7 +766,9 @@ def main() -> None:
     usage_path = out_dir / f"{prefix}_usage_report.csv"
     summary_path = out_dir / f"{prefix}_summary.txt"
 
-    export_selected_lineups(lineups_df, selected, selected_path)
+    print(f"Writing selected lineups to {selected_path}…")
+    export_selected_lineups(lineups_df, roster_cols, selected, selected_path)
+    print(f"Writing usage report to {usage_path}…")
     export_usage_report(
         counts=counts,
         usage_map=usage_map,
@@ -715,6 +835,7 @@ def main() -> None:
     summary_lines.append(f"  Summary          → {summary_path}")
 
     summary_text = "\n".join(summary_lines)
+    print(f"Writing summary to {summary_path}…")
     summary_path.write_text(summary_text)
     print(summary_text)
 
