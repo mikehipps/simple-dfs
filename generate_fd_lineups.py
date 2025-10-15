@@ -31,6 +31,7 @@ from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
 from pydfs_lineup_optimizer.sites.fanduel.classic import settings
 from custom_random_strategy import CustomRandomFantasyPointsStrategy
+from sport_helpers import get_sport_helper
 
 
 
@@ -156,7 +157,7 @@ def get_budget_from_sport():
         return settings.FanDuelSettings.budget
 
 
-def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict, work_queue, 
+def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict, work_queue,
                                    file_lock, all_lineups, total_batches, process_start_time):
     """
     Worker function that continuously processes batches from the shared queue
@@ -179,6 +180,10 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
     total_generated = 0
     
     try:
+        # Get sport helper for the configured sport type
+        sport_helper_class = get_sport_helper(SPORT_TYPE)
+        sport_helper = sport_helper_class()
+        
         # Get sport from configuration
         sport = get_sport_from_config()
         
@@ -196,17 +201,24 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         logger.info(f"Thread {thread_id}: Loading players from CSV")
         optimizer.load_players_from_csv(processed_csv)
         
-        # Get budget and calculate min salary using offset
-        budget = get_budget_from_sport()
-        min_salary = int(budget * (1 - MIN_SALARY_OFFSET))
+        # Apply sport-specific constraints using helper
+        sport_helper.apply_constraints(optimizer)
         
-        # Apply constraints
+        # Get budget from sport helper and calculate min salary using offset
+        budget = sport_helper.get_budget()
+        min_salary_offset = sport_helper.get_min_salary_offset()
+        min_salary = int(budget * (1 - min_salary_offset))
+        
+        # Apply common constraints
         optimizer.set_max_repeating_players(MAX_REPEATING_PLAYERS)
         optimizer.set_min_salary_cap(min_salary)
         
+        # Perform sport-specific pre-optimization setup
+        sport_helper.pre_optimization_setup(optimizer)
+        
         logger.info(f"Thread {thread_id}: Active constraints - "
                    f"Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${min_salary}), "
-                   f"MIP Solver, "
+                   f"MIP Solver, Sport-specific constraints applied, "
                    f"Random Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
         
         # Continuously process batches from the queue until empty
@@ -234,17 +246,20 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
                         work_queue.task_done()
                         continue
                     
+                    # Apply sport-specific post-processing
+                    processed_lineups = sport_helper.post_optimization_processing(lineups)
+                    
                     # Thread-safe addition to shared list
                     with file_lock:
-                        all_lineups.extend(lineups)
-                        total_generated += len(lineups)
+                        all_lineups.extend(processed_lineups)
+                        total_generated += len(processed_lineups)
                     
                     # Calculate timing
                     batch_duration = time.time() - batch_start_time
                     total_duration = time.time() - process_start_time
                     
                     logger.info(f"Thread {thread_id}: Batch {batch_id+1}/{total_batches} - "
-                               f"Generated {len(lineups)} lineups "
+                               f"Generated {len(processed_lineups)} lineups "
                                f"({batch_duration:.1f}s : {total_duration:.1f}s)")
                     
                 except LineupOptimizerException as e:
@@ -336,14 +351,21 @@ def generate_lineups_dynamic():
         file_lock = threading.Lock()
         all_lineups = []
         
+        # Get sport helper for logging configuration
+        sport_helper_class = get_sport_helper(SPORT_TYPE)
+        sport_helper = sport_helper_class()
+        sport_config = sport_helper.get_sport_specific_config()
+        
         logger.info(f"Starting dynamic queue lineup generation with {NUM_WORKERS} workers for {SPORT_TYPE}")
         logger.info(f"Target: {TOTAL_LINEUPS} total lineups using dynamic queue system")
         logger.info(f"Configuration: {total_batches} batches × {LINEUPS_PER_BATCH} lineups = {TOTAL_LINEUPS} lineups exactly")
         logger.info(f"Using MIP Solver with {'CustomRandomFantasyPointsStrategy' if ENABLE_RANDOM else 'default optimizer strategy'}")
-        # Calculate min salary for logging
-        budget = get_budget_from_sport()
-        min_salary = int(budget * (1 - MIN_SALARY_OFFSET))
+        # Calculate min salary for logging using sport helper
+        budget = sport_helper.get_budget()
+        min_salary_offset = sport_helper.get_min_salary_offset()
+        min_salary = int(budget * (1 - min_salary_offset))
         logger.info(f"Active constraints: Max exposure ({MAX_EXPOSURE*100}%), Max repeating players ({MAX_REPEATING_PLAYERS}), Min salary (${min_salary})")
+        logger.info(f"Sport-specific constraints: {sport_config.get('constraints', ['None'])}")
         logger.info(f"Custom Random Fantasy Points Strategy: {'ENABLED' if ENABLE_RANDOM else 'DISABLED'}")
         logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
