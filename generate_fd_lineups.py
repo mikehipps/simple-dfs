@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydfs_lineup_optimizer import Site, Sport, get_optimizer
 from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
+from pydfs_lineup_optimizer.sites.fanduel.classic import settings
 from custom_random_strategy import CustomRandomFantasyPointsStrategy
 
 # Import CSV processing from dedicated module
@@ -138,32 +139,25 @@ def get_sport_from_config():
 
 def get_budget_from_sport():
     """
-    Get budget constraint from pydfs settings based on SPORT_TYPE
-    
-    Returns:
-        int: The budget for the specified sport
+    Get budget constraint dynamically from pydfs settings classes
+    based on SPORT_TYPE configuration
     """
-    budget_mapping = {
-        "FOOTBALL": 60000,
-        "BASKETBALL": 60000,
-        "HOCKEY": 55000,
-        "BASEBALL": 35000,
-        "WNBA": 40000,
-        "NASCAR": 50000,
-        "MMA": 100,
-        "GOLF": 60000,  # Default for sports not explicitly listed
-        "SOCCER": 60000,
-        "TENNIS": 60000,
-        "LEAGUE_OF_LEGENDS": 60000
-    }
+    from pydfs_lineup_optimizer.sites.fanduel.classic import settings
     
     sport_type = SPORT_TYPE.upper()
-    if sport_type in budget_mapping:
-        return budget_mapping[sport_type]
-    else:
+    
+    # Dynamically construct the class name
+    settings_class_name = f"FanDuel{sport_type.title()}Settings"
+    
+    try:
+        # Try to get the sport-specific settings class
+        settings_class = getattr(settings, settings_class_name)
+        return settings_class.budget
+    except AttributeError:
+        # Fall back to base FanDuelSettings if sport-specific class doesn't exist
         logger = logging.getLogger(__name__)
-        logger.warning(f"Unknown sport type '{SPORT_TYPE}'. Defaulting to 60000 budget.")
-        return 60000
+        logger.warning(f"Settings class '{settings_class_name}' not found. Using base FanDuelSettings.")
+        return settings.FanDuelSettings.budget
 
 
 def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict, work_queue, 
