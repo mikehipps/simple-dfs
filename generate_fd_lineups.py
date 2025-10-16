@@ -24,7 +24,9 @@ import threading
 import time
 import signal
 import queue
+import csv
 from datetime import datetime
+from itertools import islice
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydfs_lineup_optimizer import Site, Sport, get_optimizer
 from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
@@ -157,8 +159,70 @@ def get_budget_from_sport():
         return settings.FanDuelSettings.budget
 
 
+def build_injury_status_map(csv_path):
+    """
+    Parse FanDuel CSV to build map of player ID -> injury indicator text.
+    """
+    status_map = {}
+    try:
+        with open(csv_path, 'r', newline='') as csv_file:
+            start_line = 0
+            while True:
+                line = csv_file.readline()
+                if 'FPPG' in line:
+                    break
+                if line == '':
+                    return status_map
+                start_line += 1
+            csv_file.seek(0)
+            for _ in range(start_line):
+                csv_file.readline()
+            reader = csv.DictReader(csv_file, skipinitialspace=True)
+            for row in reader:
+                player_id = (row.get('Id') or '').strip()
+                if not player_id:
+                    continue
+                status = (row.get('Injury Indicator') or '').strip()
+                status_map[player_id] = status
+    except FileNotFoundError:
+        pass
+    return status_map
+
+
+def apply_injury_filters(optimizer, injury_status_map, logger):
+    """
+    Allow questionable players while still excluding clear outs.
+    """
+    optimizer.player_pool.with_injured = True
+    out_exact = {'O', 'OUT', 'IR', 'NA', 'IL', 'D'}
+    out_prefixes = ('OUT', 'IR', 'SUS', 'SUSP', 'INA', 'INACT', 'LTIR', 'DOUBT', 'DNP', 'PUP')
+    questionable_exact = {'Q', 'QUESTIONABLE', 'GTD', 'DTD', 'PROBABLE', 'PROB', 'DAYTODAY', 'P'}
+    questionable_prefixes = ('QUEST', 'GTD', 'DTD', 'PROB', 'DAYTODAY')
+    removed = 0
+    questionable = 0
+
+    for player in list(optimizer.player_pool.all_players):
+        status_raw = injury_status_map.get(player.id, '')
+        if not status_raw:
+            continue
+        normalized = status_raw.strip().upper().replace('.', '').replace('-', '').replace(' ', '')
+        if not normalized:
+            continue
+        if normalized in out_exact or normalized.startswith(out_prefixes):
+            optimizer.player_pool.remove_player(player)
+            removed += 1
+        elif normalized in questionable_exact or normalized.startswith(questionable_prefixes):
+            questionable += 1
+
+    if removed:
+        logger.info(f"Filtered out {removed} players marked as OUT/IR/etc.")
+    if questionable:
+        logger.info(f"Retained {questionable} players with questionable statuses for optimization.")
+
+
 def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict, work_queue,
-                                   file_lock, all_lineups, total_batches, process_start_time):
+                                   file_lock, all_lineups, total_batches, process_start_time,
+                                   injury_status_map):
     """
     Worker function that continuously processes batches from the shared queue
     
@@ -200,6 +264,7 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         
         logger.info(f"Thread {thread_id}: Loading players from CSV")
         optimizer.load_players_from_csv(processed_csv)
+        apply_injury_filters(optimizer, injury_status_map, logger)
         
         # Apply sport-specific constraints using helper
         sport_helper.apply_constraints(optimizer)
@@ -343,6 +408,11 @@ def generate_lineups_dynamic():
         processed_csv = CSV_FILE
         random_values_dict = {}
         logger.info(f"Using original {SPORT_TYPE} CSV file directly: {CSV_FILE}")
+        injury_status_map = build_injury_status_map(processed_csv)
+        if injury_status_map:
+            logger.info("Parsed injury indicators from CSV (questionable players will remain eligible).")
+        else:
+            logger.warning("Could not parse injury indicators; default injury filtering will apply.")
         
         # Create dynamic work queue with exact batch calculation
         work_queue, total_batches = create_work_queue(TOTAL_LINEUPS, LINEUPS_PER_BATCH)
@@ -373,8 +443,9 @@ def generate_lineups_dynamic():
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             # Submit all worker tasks with dynamic queue
             future_to_thread = {
-                executor.submit(generate_lineups_dynamic_worker, i, processed_csv, random_values_dict, 
-                               work_queue, file_lock, all_lineups, total_batches, process_start_time): i
+                executor.submit(generate_lineups_dynamic_worker, i, processed_csv, random_values_dict,
+                               work_queue, file_lock, all_lineups, total_batches, process_start_time,
+                               injury_status_map): i
                 for i in range(NUM_WORKERS)
             }
             
