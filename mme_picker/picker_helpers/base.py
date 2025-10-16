@@ -49,6 +49,7 @@ class PlayerMaps:
     game: Dict[str, Optional[str]]
     ownership: Dict[str, float]
     name: Dict[str, str]
+    roster_order: Dict[str, Optional[str]]
 
 
 @dataclass(frozen=True)

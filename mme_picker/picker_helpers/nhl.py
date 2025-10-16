@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 from .base import (
     LineupContext,
@@ -50,6 +50,7 @@ class NHLPickerHelper(PickerHelper):
         maps = ctx.player_maps
         skater_team_counts: Counter = Counter()
         game_team_sets: Dict[str, Set[str]] = defaultdict(set)
+        power_play_groups: Dict[Tuple[str, str], List[str]] = defaultdict(list)
 
         goalie_ids = [
             pid for pid in ctx.players_id if maps.position.get(pid, "").upper() == "G"
@@ -66,6 +67,9 @@ class NHLPickerHelper(PickerHelper):
                 game = maps.game.get(pid)
                 if game:
                     game_team_sets[game].add(team)
+                roster_order = (maps.roster_order.get(pid) or "").upper()
+                if roster_order.startswith("POWER PLAY"):
+                    power_play_groups[(team, roster_order)].append(pid)
 
         stack_score = 0.0
         pair_stacks = 0
@@ -84,6 +88,17 @@ class NHLPickerHelper(PickerHelper):
 
         cross_games = sum(1 for teams in game_team_sets.values() if len(teams) >= 2)
         stack_score += 0.35 * cross_games
+
+        pp_pairs_total = 0
+        pp_bonus = 0.0
+        POWER_PLAY_PAIR_BONUS = 0.35
+        for (team, unit), players in power_play_groups.items():
+            count = len(players)
+            if count >= 2:
+                pairs = count * (count - 1) // 2
+                pp_pairs_total += pairs
+                pp_bonus += POWER_PLAY_PAIR_BONUS * pairs
+        stack_score += pp_bonus
 
         goalie_support = 0
         goalie_conflict = 0
@@ -106,6 +121,8 @@ class NHLPickerHelper(PickerHelper):
             "cross_games": cross_games,
             "goalie_support": goalie_support,
             "goalie_conflict": goalie_conflict,
+            "power_play_pairs": pp_pairs_total,
+            "power_play_bonus": pp_bonus,
         }
         return LineupFeatures(correlation_score=stack_score, tags=tags)
 
@@ -119,6 +136,7 @@ class NHLPickerHelper(PickerHelper):
         cross_total = 0
         goalie_conflicts = 0
         goalie_conflict_lineups = 0
+        pp_pairs_total = 0
         for lu in ctx.selected:
             max_stack = lu.features.tags.get("max_stack", 0)
             stack_counts[max_stack] += 1
@@ -129,6 +147,7 @@ class NHLPickerHelper(PickerHelper):
             if conflict:
                 goalie_conflicts += conflict
                 goalie_conflict_lineups += 1
+            pp_pairs_total += lu.features.tags.get("power_play_pairs", 0)
         stack_summary = ", ".join(
             f"{size}-man:{count}" for size, count in sorted(stack_counts.items(), reverse=True)
         )
@@ -139,4 +158,6 @@ class NHLPickerHelper(PickerHelper):
         lines.append(
             f"Goalie conflicts: {goalie_conflicts} skaters across {goalie_conflict_lineups} lineups."
         )
+        if pp_pairs_total:
+            lines.append(f"Power-play pairs: {pp_pairs_total} total pairings benefited from bonuses.")
         return lines

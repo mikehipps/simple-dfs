@@ -308,6 +308,7 @@ def build_player_maps(
     game_map: Dict[str, Optional[str]] = {}
     own_map: Dict[str, float] = {}
     name_map: Dict[str, str] = {}
+    roster_map: Dict[str, Optional[str]] = {}
     for _, row in df.iterrows():
         pid_raw = row.get(id_col, "")
         if pd.isna(pid_raw):
@@ -332,6 +333,11 @@ def build_player_maps(
         name_val = row.get("_FullName", None)
         if pd.notna(name_val):
             name_map[pid] = str(name_val).strip()
+        roster_val = row.get("Roster Order", None)
+        if pd.notna(roster_val):
+            roster_map[pid] = str(roster_val).strip()
+        else:
+            roster_map[pid] = None
     return PlayerMaps(
         projection=proj_map,
         position=pos_map,
@@ -340,6 +346,7 @@ def build_player_maps(
         game=game_map,
         ownership=own_map,
         name=name_map,
+        roster_order=roster_map,
     )
 
 
