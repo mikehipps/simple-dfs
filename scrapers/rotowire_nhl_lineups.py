@@ -28,6 +28,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -272,8 +273,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("scrapers/output/rotowire_nhl_lineups.csv"),
-        help="Path to the CSV file to create (default: scrapers/output/rotowire_nhl_lineups.csv)",
+        default=None,
+        help="Path to the CSV file to create (default: scrapers/output/rotowire_nhl_lineups_MMDD_HHMM.csv)",
     )
     parser.add_argument(
         "--no-export",
@@ -291,7 +292,12 @@ def main() -> None:
         preview = pd.DataFrame([asdict(row) for row in rows])
         print(preview.head(20))
     else:
-        export_to_csv(rows, args.out)
+        if args.out is not None:
+            output_path = (SCRAPERS_DIR / args.out).resolve() if not args.out.is_absolute() else args.out
+        else:
+            timestamp = datetime.now().strftime("%m%d_%H%M")
+            output_path = SCRAPERS_DIR / "output" / f"rotowire_nhl_lineups_{timestamp}.csv"
+        export_to_csv(rows, output_path)
 
 
 if __name__ == "__main__":
