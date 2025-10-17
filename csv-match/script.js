@@ -185,6 +185,34 @@ function download(filename, text) {
   a.href = url; a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+function generateDynamicFilename() {
+  const sport = sportSelect.value.toUpperCase();
+  
+  // Get first 3 letters from File A filename
+  let fileAPrefix = "UNK";
+  if (fileA.files.length > 0) {
+    const fileNameA = fileA.files[0].name;
+    fileAPrefix = fileNameA.substring(0, 3).toUpperCase();
+  }
+  
+  // Get first 3 letters from File B filename
+  let fileBPrefix = "UNK";
+  if (fileB.files.length > 0) {
+    const fileNameB = fileB.files[0].name;
+    fileBPrefix = fileNameB.substring(0, 3).toUpperCase();
+  }
+  
+  // Get current date/time in MMDD-HHMM format
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const timestamp = `${month}${day}-${hours}${minutes}`;
+  
+  return `${sport}-${fileAPrefix}-${fileBPrefix}-${timestamp}.csv`;
+}
 function getAliases() { try { return JSON.parse(localStorage.getItem("csvMatchAliases") || "{}"); } catch { return {}; } }
 function setAliases(obj) { localStorage.setItem("csvMatchAliases", JSON.stringify(obj)); }
 
@@ -1152,7 +1180,8 @@ function renderReviewTable() {
 document.getElementById("btnExportCSV").addEventListener("click", () => {
   if (!mergedStore) return;
   const csv = Papa.unparse(mergedStore);
-  download("merged.csv", csv);
+  const filename = generateDynamicFilename();
+  download(filename, csv);
 });
 document.getElementById("btnExportManifest").addEventListener("click", () => {
   if (!manifest) return;
