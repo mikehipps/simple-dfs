@@ -96,6 +96,8 @@ class PickerGUI:
         self.prefix_var = tk.StringVar()
         self.outdir_var = tk.StringVar()
         self.seed_var = tk.StringVar()
+        self.pp_bonus_var = tk.StringVar()
+        self.pp_bonus_enabled = tk.BooleanVar(value=True)
 
         self.param_vars: Dict[str, tk.StringVar] = {
             "n": tk.StringVar(),
@@ -184,6 +186,22 @@ class PickerGUI:
         self._add_simple_entry(extras, "Output Directory", self.outdir_var, 1, "out_dir")
         self._add_simple_entry(extras, "Seed", self.seed_var, 2, "seed")
 
+        # NHL-specific options
+        self.nhl_frame = ttk.LabelFrame(main_frame, text="NHL Options")
+        nhl_toggle = ttk.Checkbutton(
+            self.nhl_frame,
+            text="Apply power-play pair bonus",
+            variable=self.pp_bonus_enabled,
+        )
+        nhl_toggle.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
+        ToolTip(nhl_toggle, "Boost correlation when teammates share POWER PLAY #1/#2 tags.")
+        pp_entry_label = ttk.Label(self.nhl_frame, text="Bonus per pair:")
+        pp_entry_label.grid(row=0, column=1, sticky="e", padx=(12, 4), pady=4)
+        ToolTip(pp_entry_label, "Multiplier added for each same-unit pairing (default 0.35).")
+        ttk.Entry(self.nhl_frame, textvariable=self.pp_bonus_var, width=8).grid(
+            row=0, column=2, sticky="w", pady=4
+        )
+
         # Run + output
         self.run_button.pack(pady=(0, 8))
         ttk.Label(main_frame, text="Picker Output:").pack(anchor="w")
@@ -254,6 +272,16 @@ class PickerGUI:
         # Suggested default output directory
         self.outdir_var.set("autoNHL" if sport == "nhl" else "autoMME")
 
+        if sport == "nhl":
+            helper = self.helpers[sport]
+            bonus_value = getattr(helper, "power_play_pair_bonus", 0.35)
+            enabled = getattr(helper, "power_play_bonus_enabled", True)
+            self.pp_bonus_var.set(f"{bonus_value:g}")
+            self.pp_bonus_enabled.set(enabled)
+            self.nhl_frame.pack(fill=tk.X, pady=(0, 12))
+        else:
+            self.nhl_frame.pack_forget()
+
     def _collect_args(self) -> Optional[List[str]]:
         lineup = self.lineup_var.get().strip()
         projections = self.proj_var.get().strip()
@@ -303,6 +331,18 @@ class PickerGUI:
                 messagebox.showerror("Invalid seed", "Seed must be an integer.")
                 return None
             args.extend(["--seed", seed_val])
+        if self.sport_var.get() == "nhl":
+            if not self.pp_bonus_enabled.get():
+                args.append("--disable-pp-bonus")
+            else:
+                bonus_str = self.pp_bonus_var.get().strip()
+                if bonus_str:
+                    try:
+                        float(bonus_str)
+                    except ValueError:
+                        messagebox.showerror("Invalid bonus", "Power-play bonus must be numeric.")
+                        return None
+                    args.extend(["--pp-bonus", bonus_str])
         return args
 
     def run_picker(self) -> None:

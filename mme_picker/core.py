@@ -689,6 +689,8 @@ def parse(args: Optional[List[str]], default_sport: Optional[str]) -> argparse.N
     parser.add_argument("--seed", type=int, help="Optional RNG seed.")
     parser.add_argument("--out-prefix", help="Filename prefix for outputs (default derived from lineup CSV).")
     parser.add_argument("--out-dir", default="autoFD", help="Directory for outputs (default: autoFD).")
+    parser.add_argument("--pp-bonus", type=float, help="Override power-play pair bonus (NHL only).")
+    parser.add_argument("--disable-pp-bonus", action="store_true", help="Disable power-play pair bonus (NHL only).")
     return parser.parse_args(remaining, namespace=known)
 
 
@@ -721,6 +723,7 @@ def main(argv: Optional[List[str]] = None, *, default_sport: Optional[str] = Non
     helpers = get_registered_helpers()
     helper = helpers[args.sport]
     args, score_weights = apply_defaults(args, helper)
+    helper.configure(args)
 
     if args.out_dir == "autoFD":
         args.out_dir = "autoNHL" if helper.key == "nhl" else "autoMME"

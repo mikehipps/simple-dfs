@@ -73,3 +73,8 @@ autoMME/mme150-2025-10-12-11-28_summary.txt
 .~lock*.csv#
 inputs.py
 fd_inputs.py
+csv-match/outputs/nhl-1017-10AM
+
+# csv-match 
+csv-match/inputs
+csv-match/outputs

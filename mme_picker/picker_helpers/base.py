@@ -9,6 +9,7 @@ summary reporting hooks.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import argparse
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -90,6 +91,7 @@ class PickerHelper(ABC):
 
     key: str
     name: str
+    bonus_tags: Dict[str, Any] = {}
 
     @property
     @abstractmethod
@@ -119,6 +121,10 @@ class PickerHelper(ABC):
     def after_selection_telemetry(self, lineup: LineupFeatures) -> None:
         """Hook for tracking metrics during selection if needed."""
         _ = lineup
+
+    def configure(self, args: argparse.Namespace) -> None:
+        """Hook for helpers to consume runtime arguments."""
+        del args
 
 
 def get_registered_helpers() -> Dict[str, PickerHelper]:
