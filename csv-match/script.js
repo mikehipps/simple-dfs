@@ -789,7 +789,13 @@ function buildIndex(rows, getName, teamCol, manualTeamMappings = {}) {
   }
   const fuseByTeam = new Map();
   for (const [t, arr] of byTeam.entries()) {
-    fuseByTeam.set(t, new Fuse(arr, { keys: ["_norm_name"], threshold: 0.12, includeScore: true }));
+    fuseByTeam.set(t, new Fuse(arr, {
+      keys: ["_norm_name"],
+      threshold: 0.4,
+      includeScore: true,
+      ignoreLocation: true,
+      distance: 80,
+    }));
   }
   return { items, map, fuseByTeam, byTeam };
 }
@@ -909,7 +915,7 @@ function renderTeamMappingUI(validationResult) {
       select.value = teamValidationState.manualMappings[teamA];
       console.log(`   💾 Restored mapping: ${teamA} → ${teamValidationState.manualMappings[teamA]}`);
     }
-    
+
     select.addEventListener("change", () => {
       console.log(`   🔄 Mapping changed: ${teamA} → ${select.value}`);
       if (select.value) {
@@ -1020,7 +1026,10 @@ document.getElementById("btnMerge").addEventListener("click", () => {
   
   // Load manual team mappings for the current sport
   const sport = sportSelect.value;
-  const manualTeamMappings = getTeamMappings(sport);
+  const manualTeamMappings = {
+    ...getTeamMappings(sport),
+    ...(teamValidationState?.manualMappings || {}),
+  };
   console.log(`💾 Loaded manual team mappings for ${sport}:`, manualTeamMappings);
   
   const Sidx = buildIndex(S, nameGetterS, teamS, manualTeamMappings);
