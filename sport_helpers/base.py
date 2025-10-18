@@ -104,6 +104,10 @@ class SportHelper(ABC):
     def apply_random_bias(self, optimizer, rng):
         """Adjust player projections before each optimization batch (optional)."""
         return
+
+    def get_random_bias_summary(self):
+        """Return summary stats collected during random bias application (optional)."""
+        return None
     
     def post_optimization_processing(self, lineups):
         """

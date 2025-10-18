@@ -30,6 +30,15 @@ class NHLHelper(SportHelper):
         self.team_flip_prob = getattr(_cfg, "NHL_TEAM_FLIP_PROB", 0.5)
         self.line_flip_prob = getattr(_cfg, "NHL_LINE_FLIP_PROB", 0.5)
         self.pp_flip_prob = getattr(_cfg, "NHL_PP_FLIP_PROB", 0.5)
+        self.flip_summary = {
+            "batches": 0,
+            "team_hits": 0,
+            "line1_hits": 0,
+            "line2_hits": 0,
+            "pp1_hits": 0,
+            "pp2_hits": 0,
+            "goalie_bonus_hits": 0,
+        }
         self.player_meta = {}
         self._base_fppg = {}
         self._base_floor = {}
@@ -176,9 +185,15 @@ class NHLHelper(SportHelper):
                 pp_flip[(team, pp)] = pp in {"1", "2"} and rng.random() < self.pp_flip_prob
 
         goalie_bonus_teams = set()
+        team_hit_counts = 0
+        line1_hits = 0
+        line2_hits = 0
+        pp1_hits = 0
+        pp2_hits = 0
         for team in team_players:
             if not team_flip.get(team):
                 continue
+            team_hit_counts += 1
             has_line = any(line_flip.get((team, line)) for line in team_lines.get(team, []) if line in {"1", "2"})
             has_pp = any(pp_flip.get((team, pp)) for pp in team_pps.get(team, []) if pp in {"1", "2"})
             if has_line and has_pp:
@@ -196,10 +211,18 @@ class NHLHelper(SportHelper):
                 line_key = line if line is not None else None
                 if line_key in {"1", "2"} and line_flip.get((team, line_key)):
                     multiplier *= (1 + self.line_bonus)
+                    if line_key == "1":
+                        line1_hits += 1
+                    elif line_key == "2":
+                        line2_hits += 1
 
                 pp_key = pp if pp is not None else None
                 if pp_key in {"1", "2"} and pp_flip.get((team, pp_key)):
                     multiplier *= (1 + self.pp_bonus)
+                    if pp_key == "1":
+                        pp1_hits += 1
+                    elif pp_key == "2":
+                        pp2_hits += 1
 
                 # Apply goalie/line1D bonus if all flips hit for the team
                 if team in goalie_bonus_teams:
@@ -211,6 +234,17 @@ class NHLHelper(SportHelper):
                     player.fppg_floor = self._base_floor[player.id] * multiplier
                 if player.id in self._base_ceil and self._base_ceil[player.id] is not None:
                     player.fppg_ceil = self._base_ceil[player.id] * multiplier
+
+        self.flip_summary["batches"] += 1
+        self.flip_summary["team_hits"] += team_hit_counts
+        self.flip_summary["line1_hits"] += line1_hits
+        self.flip_summary["line2_hits"] += line2_hits
+        self.flip_summary["pp1_hits"] += pp1_hits
+        self.flip_summary["pp2_hits"] += pp2_hits
+        self.flip_summary["goalie_bonus_hits"] += len(goalie_bonus_teams)
+
+    def get_random_bias_summary(self):
+        return dict(self.flip_summary)
 
     @staticmethod
     def _normalize_unit(value):

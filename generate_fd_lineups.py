@@ -26,6 +26,7 @@ import signal
 import queue
 import random
 import csv
+import csv
 from datetime import datetime
 from itertools import islice
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -345,11 +346,11 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         
         thread_duration = time.time() - thread_start_time
         logger.info(f"Thread {thread_id}: Completed with {total_generated} total lineups generated in {thread_duration:.1f}s")
-        return thread_id, True, total_generated, None
-        
+        return thread_id, True, total_generated, None, sport_helper.get_random_bias_summary()
+    
     except Exception as e:
         logger.error(f"Thread {thread_id}: Unexpected error - {str(e)}")
-        return thread_id, False, 0, f"Unexpected error: {str(e)}"
+        return thread_id, False, 0, f"Unexpected error: {str(e)}", None
 
 
 def save_partial_results(all_lineups, process_start_time):
@@ -444,6 +445,11 @@ def generate_lineups_dynamic():
         logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
         # Use ThreadPoolExecutor for better resource management
+        combined_flip_summary = None
+        if SPORT_TYPE.upper() in ("HOCKEY", "NHL"):
+            combined_flip_summary = {"batches": 0, "team_hits": 0, "line1_hits": 0, "line2_hits": 0,
+                                     "pp1_hits": 0, "pp2_hits": 0, "goalie_bonus_hits": 0}
+
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             # Submit all worker tasks with dynamic queue
             future_to_thread = {
@@ -462,12 +468,15 @@ def generate_lineups_dynamic():
                 thread_id = future_to_thread[future]
                 try:
                     result = future.result()
-                    thread_id, success, lineups_count, error = result
+                    thread_id, success, lineups_count, error, flip_summary = result
                     completed_threads += 1
                     
                     if success:
                         successful_threads += 1
                         total_lineups_generated += lineups_count
+                        if combined_flip_summary is not None and flip_summary:
+                            for key in combined_flip_summary:
+                                combined_flip_summary[key] += flip_summary.get(key, 0)
                         logger.info(f"Thread {thread_id} completed successfully with {lineups_count} lineups")
                     else:
                         logger.error(f"Thread {thread_id} failed: {error}")
@@ -482,7 +491,7 @@ def generate_lineups_dynamic():
             lineup_filepath, usage_filepath = save_partial_results(all_lineups, process_start_time)
             
             logger.info(f"Graceful shutdown complete. {len(all_lineups)} lineups saved as partial results.")
-            return lineup_filepath, usage_filepath, all_lineups
+            return lineup_filepath, usage_filepath, all_lineups, combined_flip_summary
         
         # Calculate total process duration
         total_duration = time.time() - process_start_time
@@ -532,7 +541,7 @@ def generate_lineups_dynamic():
         logger.info(f"Lineups saved to: {lineup_filepath}")
         logger.info(f"Player usage report will be saved to: {usage_filepath}")
         
-        return lineup_filepath, usage_filepath, all_lineups
+        return lineup_filepath, usage_filepath, all_lineups, combined_flip_summary
         
     except Exception as e:
         logger.error(f"Error in parallel lineup generation: {str(e)}")
@@ -613,6 +622,133 @@ def generate_player_usage_report(lineups, output_file):
         return False
 
 
+def load_hockey_metadata(csv_path):
+    meta = {}
+    try:
+        with open(csv_path, newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                pid = row.get('Id')
+                if not pid:
+                    continue
+                line_raw = row.get('HockeyLine')
+                pp_raw = row.get('HockeyPPLine')
+                team = row.get('Team')
+                meta[pid] = {
+                    'line': _normalize_unit(line_raw),
+                    'pp': _normalize_unit(pp_raw),
+                    'team': team
+                }
+    except FileNotFoundError:
+        logging.getLogger(__name__).warning("Metadata CSV not found: %s", csv_path)
+    return meta
+
+
+def _normalize_unit(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == 'nan':
+        return None
+    try:
+        return str(int(float(text)))
+    except (ValueError, TypeError):
+        return text
+
+
+def generate_lineup_summary(lineups, metadata, flip_summary, output_file):
+    logger = logging.getLogger(__name__)
+    try:
+        total_lineups = len(lineups)
+        if total_lineups == 0:
+            return False
+
+        from collections import Counter, defaultdict
+        import statistics
+
+        projections = [lu.fantasy_points_projection for lu in lineups]
+        salaries = [lu.salary_costs for lu in lineups]
+
+        max_team_stack_dist = Counter()
+        lineup_unique_teams = Counter()
+        team_exposure = Counter()
+        line_stack_counts = Counter()
+        pp_stack_counts = Counter()
+
+        for lineup in lineups:
+            team_counts = Counter(p.team for p in lineup.players)
+            for team, count in team_counts.items():
+                team_exposure[team] += 1
+            max_team_stack_dist[max(team_counts.values())] += 1
+            lineup_unique_teams[len(team_counts)] += 1
+
+            # Line/PP stacks
+            team_line_counts = defaultdict(lambda: defaultdict(int))
+            team_pp_counts = defaultdict(lambda: defaultdict(int))
+            for player in lineup.players:
+                meta = metadata.get(player.id, {}) if metadata else {}
+                line = meta.get('line')
+                pp = meta.get('pp')
+                if line:
+                    team_line_counts[player.team][line] += 1
+                if pp:
+                    team_pp_counts[player.team][pp] += 1
+            for team, counts in team_line_counts.items():
+                for line, count in counts.items():
+                    if count >= 2:
+                        key = f"{team} line {line} ({count})"
+                        line_stack_counts[key] += 1
+            for team, counts in team_pp_counts.items():
+                for pp, count in counts.items():
+                    if count >= 2:
+                        key = f"{team} PP{pp} ({count})"
+                        pp_stack_counts[key] += 1
+
+        with open(output_file, 'w', encoding='utf-8') as fh:
+            fh.write(f"Total lineups: {total_lineups}\n")
+            fh.write(f"Average projection: {statistics.mean(projections):.2f}\n")
+            fh.write(f"Projection range: {min(projections):.2f} – {max(projections):.2f}\n")
+            fh.write(f"Average salary: {statistics.mean(salaries):.0f}\n")
+            fh.write("\nTeam stack distribution (max players from one team per lineup):\n")
+            for stack_size in sorted(max_team_stack_dist):
+                count = max_team_stack_dist[stack_size]
+                fh.write(f"  {stack_size} players: {count} lineups ({count/total_lineups:.1%})\n")
+
+            fh.write("\nUnique teams per lineup distribution:\n")
+            for unique_count in sorted(lineup_unique_teams):
+                count = lineup_unique_teams[unique_count]
+                fh.write(f"  {unique_count} teams: {count} lineups ({count/total_lineups:.1%})\n")
+
+            fh.write("\nLine stacks (>=2 players same team & line):\n")
+            if line_stack_counts:
+                for key, count in line_stack_counts.most_common(10):
+                    fh.write(f"  {key}: {count}\n")
+            else:
+                fh.write("  None\n")
+
+            fh.write("\nPower-play stacks (>=2 players same team & PP unit):\n")
+            if pp_stack_counts:
+                for key, count in pp_stack_counts.most_common(10):
+                    fh.write(f"  {key}: {count}\n")
+            else:
+                fh.write("  None\n")
+
+        if flip_summary:
+            fh.write("\nRandom bias flip summary:\n")
+            fh.write(f"  Batches processed: {flip_summary.get('batches', 0)}\n")
+            fh.write(f"  Team flips won: {flip_summary.get('team_hits', 0)}\n")
+            fh.write(f"  Line 1 flips won: {flip_summary.get('line1_hits', 0)}\n")
+            fh.write(f"  Line 2 flips won: {flip_summary.get('line2_hits', 0)}\n")
+            fh.write(f"  PP1 flips won: {flip_summary.get('pp1_hits', 0)}\n")
+            fh.write(f"  PP2 flips won: {flip_summary.get('pp2_hits', 0)}\n")
+            fh.write(f"  Goalie/Line1D bonuses: {flip_summary.get('goalie_bonus_hits', 0)}\n")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error generating lineup summary: {e}")
+        return False
+
+
 def main():
     """Main function to run the lineup generator"""
     logger = setup_logging()
@@ -634,7 +770,7 @@ def main():
     result = generate_lineups_dynamic()
     
     if result:
-        lineup_filepath, usage_filepath, all_lineups = result
+        lineup_filepath, usage_filepath, all_lineups, flip_summary = result
         
         # Check if this was a partial result due to cancellation
         if cancellation_requested.is_set():
@@ -654,6 +790,14 @@ def main():
             else:
                 logger.error("Player usage report generation failed!")
             
+            summary_path = None
+            if SPORT_TYPE.upper() in ("HOCKEY", "NHL"):
+                summary_path = lineup_filepath.replace("-lineups.csv", "-summary.txt")
+                metadata = load_hockey_metadata(CSV_FILE)
+                if generate_lineup_summary(all_lineups, metadata, flip_summary, summary_path):
+                    logger.info(f"Lineup summary saved to: {summary_path}")
+                else:
+                    logger.warning("Failed to generate lineup summary.")
             logger.info("Lineup generation completed successfully!")
             logger.info(f"Lineups saved to: {lineup_filepath}")
             logger.info(f"Usage report saved to: {usage_filepath}")
