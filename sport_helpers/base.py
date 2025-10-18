@@ -97,6 +97,14 @@ class SportHelper(ABC):
         """
         pass
     
+    def load_metadata(self, csv_path):
+        """Load sport-specific metadata from the projections CSV (optional)."""
+        return
+
+    def apply_random_bias(self, optimizer, rng):
+        """Adjust player projections before each optimization batch (optional)."""
+        return
+    
     def post_optimization_processing(self, lineups):
         """
         Perform any sport-specific processing after optimization completes.

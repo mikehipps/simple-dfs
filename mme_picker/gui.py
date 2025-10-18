@@ -98,6 +98,8 @@ class PickerGUI:
         self.seed_var = tk.StringVar()
         self.pp_bonus_var = tk.StringVar()
         self.pp_bonus_enabled = tk.BooleanVar(value=True)
+        self.line_bonus_var = tk.StringVar()
+        self.line_bonus_enabled = tk.BooleanVar(value=True)
 
         self.param_vars: Dict[str, tk.StringVar] = {
             "n": tk.StringVar(),
@@ -188,18 +190,32 @@ class PickerGUI:
 
         # NHL-specific options
         self.nhl_frame = ttk.LabelFrame(main_frame, text="NHL Options")
+        line_toggle = ttk.Checkbutton(
+            self.nhl_frame,
+            text="Apply even-strength line bonus",
+            variable=self.line_bonus_enabled,
+        )
+        line_toggle.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
+        ToolTip(line_toggle, "Boost correlation when teammates share the same forward line.")
+        line_entry_label = ttk.Label(self.nhl_frame, text="Bonus per pair:")
+        line_entry_label.grid(row=0, column=1, sticky="e", padx=(12, 4), pady=4)
+        ToolTip(line_entry_label, "Multiplier added for same even-strength line pairings (default 0.25).")
+        ttk.Entry(self.nhl_frame, textvariable=self.line_bonus_var, width=8).grid(
+            row=0, column=2, sticky="w", pady=4
+        )
+
         nhl_toggle = ttk.Checkbutton(
             self.nhl_frame,
             text="Apply power-play pair bonus",
             variable=self.pp_bonus_enabled,
         )
-        nhl_toggle.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
-        ToolTip(nhl_toggle, "Boost correlation when teammates share POWER PLAY #1/#2 tags.")
+        nhl_toggle.grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
+        ToolTip(nhl_toggle, "Boost correlation when teammates share the same power-play unit.")
         pp_entry_label = ttk.Label(self.nhl_frame, text="Bonus per pair:")
-        pp_entry_label.grid(row=0, column=1, sticky="e", padx=(12, 4), pady=4)
-        ToolTip(pp_entry_label, "Multiplier added for each same-unit pairing (default 0.35).")
+        pp_entry_label.grid(row=1, column=1, sticky="e", padx=(12, 4), pady=4)
+        ToolTip(pp_entry_label, "Multiplier added for same power-play unit pairings (default 0.35).")
         ttk.Entry(self.nhl_frame, textvariable=self.pp_bonus_var, width=8).grid(
-            row=0, column=2, sticky="w", pady=4
+            row=1, column=2, sticky="w", pady=4
         )
 
         # Run + output
@@ -278,6 +294,10 @@ class PickerGUI:
             enabled = getattr(helper, "power_play_bonus_enabled", True)
             self.pp_bonus_var.set(f"{bonus_value:g}")
             self.pp_bonus_enabled.set(enabled)
+            line_bonus_value = getattr(helper, "line_pair_bonus", 0.25)
+            line_enabled = getattr(helper, "line_bonus_enabled", True)
+            self.line_bonus_var.set(f"{line_bonus_value:g}")
+            self.line_bonus_enabled.set(line_enabled)
             self.nhl_frame.pack(fill=tk.X, pady=(0, 12))
         else:
             self.nhl_frame.pack_forget()
@@ -332,6 +352,17 @@ class PickerGUI:
                 return None
             args.extend(["--seed", seed_val])
         if self.sport_var.get() == "nhl":
+            if not self.line_bonus_enabled.get():
+                args.append("--disable-line-bonus")
+            else:
+                line_str = self.line_bonus_var.get().strip()
+                if line_str:
+                    try:
+                        float(line_str)
+                    except ValueError:
+                        messagebox.showerror("Invalid bonus", "Line bonus must be numeric.")
+                        return None
+                    args.extend(["--line-bonus", line_str])
             if not self.pp_bonus_enabled.get():
                 args.append("--disable-pp-bonus")
             else:

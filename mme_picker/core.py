@@ -309,6 +309,8 @@ def build_player_maps(
     own_map: Dict[str, float] = {}
     name_map: Dict[str, str] = {}
     roster_map: Dict[str, Optional[str]] = {}
+    line_map: Dict[str, Optional[str]] = {}
+    pp_line_map: Dict[str, Optional[str]] = {}
     for _, row in df.iterrows():
         pid_raw = row.get(id_col, "")
         if pd.isna(pid_raw):
@@ -338,6 +340,22 @@ def build_player_maps(
             roster_map[pid] = str(roster_val).strip()
         else:
             roster_map[pid] = None
+        line_val = row.get("HockeyLine", None)
+        if pd.notna(line_val):
+            line_str = str(line_val).strip()
+            if line_str.endswith('.0'):
+                line_str = line_str[:-2]
+            line_map[pid] = line_str if line_str else None
+        else:
+            line_map[pid] = None
+        pp_line_val = row.get("HockeyPPLine", None)
+        if pd.notna(pp_line_val):
+            pp_str = str(pp_line_val).strip()
+            if pp_str.endswith('.0'):
+                pp_str = pp_str[:-2]
+            pp_line_map[pid] = pp_str if pp_str else None
+        else:
+            pp_line_map[pid] = None
     return PlayerMaps(
         projection=proj_map,
         position=pos_map,
@@ -347,6 +365,8 @@ def build_player_maps(
         ownership=own_map,
         name=name_map,
         roster_order=roster_map,
+        line=line_map,
+        pp_line=pp_line_map,
     )
 
 
@@ -691,6 +711,8 @@ def parse(args: Optional[List[str]], default_sport: Optional[str]) -> argparse.N
     parser.add_argument("--out-dir", default="autoFD", help="Directory for outputs (default: autoFD).")
     parser.add_argument("--pp-bonus", type=float, help="Override power-play pair bonus (NHL only).")
     parser.add_argument("--disable-pp-bonus", action="store_true", help="Disable power-play pair bonus (NHL only).")
+    parser.add_argument("--line-bonus", type=float, help="Override even-strength line pair bonus (NHL only).")
+    parser.add_argument("--disable-line-bonus", action="store_true", help="Disable even-strength line pair bonus (NHL only).")
     return parser.parse_args(remaining, namespace=known)
 
 

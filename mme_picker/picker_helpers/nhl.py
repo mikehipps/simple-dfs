@@ -32,6 +32,8 @@ class NHLPickerHelper(PickerHelper):
     def __init__(self) -> None:
         self.power_play_bonus_enabled = True
         self.power_play_pair_bonus = 0.35
+        self.line_bonus_enabled = True
+        self.line_pair_bonus = 0.25
 
     def defaults(self) -> PickerDefaults:
         return PickerDefaults(
@@ -58,12 +60,19 @@ class NHLPickerHelper(PickerHelper):
             self.power_play_bonus_enabled = True
             if getattr(args, "pp_bonus", None) is not None:
                 self.power_play_pair_bonus = float(args.pp_bonus)
+        if getattr(args, "disable_line_bonus", False):
+            self.line_bonus_enabled = False
+        else:
+            self.line_bonus_enabled = True
+            if getattr(args, "line_bonus", None) is not None:
+                self.line_pair_bonus = float(args.line_bonus)
 
     def compute_lineup_features(self, ctx: LineupContext) -> LineupFeatures:
         maps = ctx.player_maps
         skater_team_counts: Counter = Counter()
         game_team_sets: Dict[str, Set[str]] = defaultdict(set)
         power_play_groups: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+        even_line_groups: Dict[Tuple[str, str], List[str]] = defaultdict(list)
 
         goalie_ids = [
             pid for pid in ctx.players_id if maps.position.get(pid, "").upper() == "G"
@@ -80,9 +89,20 @@ class NHLPickerHelper(PickerHelper):
                 game = maps.game.get(pid)
                 if game:
                     game_team_sets[game].add(team)
-                roster_order = (maps.roster_order.get(pid) or "").upper()
-                if roster_order.startswith("POWER PLAY"):
-                    power_play_groups[(team, roster_order)].append(pid)
+                line_val = maps.line.get(pid)
+                if line_val:
+                    even_line_groups[(team, line_val)].append(pid)
+                roster_order = maps.roster_order.get(pid) or ""
+                pp_val = maps.pp_line.get(pid)
+                pp_key = None
+                if pp_val:
+                    pp_key = str(pp_val)
+                elif roster_order:
+                    upper = roster_order.upper()
+                    if "POWER PLAY" in upper:
+                        pp_key = upper.split()[-1].strip("#")
+                if pp_key:
+                    power_play_groups[(team, pp_key)].append(pid)
 
         stack_score = 0.0
         pair_stacks = 0
@@ -101,6 +121,17 @@ class NHLPickerHelper(PickerHelper):
 
         cross_games = sum(1 for teams in game_team_sets.values() if len(teams) >= 2)
         stack_score += 0.35 * cross_games
+
+        even_pairs_total = 0
+        even_bonus = 0.0
+        if self.line_bonus_enabled and self.line_pair_bonus:
+            for (team, unit), players in even_line_groups.items():
+                count = len(players)
+                if count >= 2:
+                    pairs = count * (count - 1) // 2
+                    even_pairs_total += pairs
+                    even_bonus += self.line_pair_bonus * pairs
+            stack_score += even_bonus
 
         pp_pairs_total = 0
         pp_bonus = 0.0
@@ -137,6 +168,9 @@ class NHLPickerHelper(PickerHelper):
             "power_play_pairs": pp_pairs_total,
             "power_play_bonus": pp_bonus,
             "power_play_bonus_value": self.power_play_pair_bonus if self.power_play_bonus_enabled else 0.0,
+            "line_pairs": even_pairs_total,
+            "line_bonus": even_bonus,
+            "line_bonus_value": self.line_pair_bonus if self.line_bonus_enabled else 0.0,
         }
         return LineupFeatures(correlation_score=stack_score, tags=tags)
 
@@ -150,6 +184,8 @@ class NHLPickerHelper(PickerHelper):
         cross_total = 0
         goalie_conflicts = 0
         goalie_conflict_lineups = 0
+        line_pairs_total = 0
+        line_bonus_total = 0.0
         pp_pairs_total = 0
         pp_bonus_total = 0.0
         for lu in ctx.selected:
@@ -162,6 +198,8 @@ class NHLPickerHelper(PickerHelper):
             if conflict:
                 goalie_conflicts += conflict
                 goalie_conflict_lineups += 1
+            line_pairs_total += lu.features.tags.get("line_pairs", 0)
+            line_bonus_total += lu.features.tags.get("line_bonus", 0.0)
             pp_pairs_total += lu.features.tags.get("power_play_pairs", 0)
             pp_bonus_total += lu.features.tags.get("power_play_bonus", 0.0)
         stack_summary = ", ".join(
@@ -174,10 +212,16 @@ class NHLPickerHelper(PickerHelper):
         lines.append(
             f"Goalie conflicts: {goalie_conflicts} skaters across {goalie_conflict_lineups} lineups."
         )
-        if not self.power_play_bonus_enabled:
-            lines.append("Power-play bonus: disabled.")
+        if self.line_bonus_enabled:
+            lines.append(
+                f"Line pairs: {line_pairs_total} pairings (+{line_bonus_total:.2f} bonus total, {self.line_pair_bonus:.2f} each)."
+            )
         else:
+            lines.append("Line bonus: disabled.")
+        if self.power_play_bonus_enabled:
             lines.append(
                 f"Power-play pairs: {pp_pairs_total} pairings (+{pp_bonus_total:.2f} bonus total, {self.power_play_pair_bonus:.2f} each)."
             )
+        else:
+            lines.append("Power-play bonus: disabled.")
         return lines

@@ -24,6 +24,7 @@ import threading
 import time
 import signal
 import queue
+import random
 import csv
 from datetime import datetime
 from itertools import islice
@@ -247,6 +248,8 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         # Get sport helper for the configured sport type
         sport_helper_class = get_sport_helper(SPORT_TYPE)
         sport_helper = sport_helper_class()
+        sport_helper.load_metadata(processed_csv)
+        rng = random.Random()
         
         # Get sport from configuration
         sport = get_sport_from_config()
@@ -304,6 +307,7 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
                            f"Generating {LINEUPS_PER_BATCH} lineups")
                 
                 try:
+                    sport_helper.apply_random_bias(optimizer, rng)
                     lineups = list(optimizer.optimize(LINEUPS_PER_BATCH, max_exposure=MAX_EXPOSURE))
                     
                     if not lineups:
