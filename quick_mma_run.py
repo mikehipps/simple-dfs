@@ -7,6 +7,7 @@ from pathlib import Path
 from pydfs_lineup_optimizer import (
     AfterEachExposureStrategy,
     RandomFantasyPointsStrategy,
+    ProgressiveFantasyPointsStrategy,
     StandardFantasyPointsStrategy,
     Site,
     Sport,
@@ -18,12 +19,12 @@ from collections import defaultdict
 csv_path = Path("csv-match/inputs/fdmma.csv")
 
 # How many lineups you want
-num_lineups = 500
+num_lineups = 3000
 
 # Optional tweaks
-max_exposure = .33       # e.g. 0.6 for 60% cap
+max_exposure = .35       # e.g. 0.6 for 60% cap
 min_salary = 88       # if you want to force spend-up
-randomize = True         # enable Min/Max Deviation randomizer
+randomize = False         # enable Min/Max Deviation randomizer
 
 def main():
     optimizer = get_optimizer(Site.FANDUEL, Sport.MMA)
@@ -36,7 +37,7 @@ def main():
     if randomize:
         optimizer.set_fantasy_points_strategy(RandomFantasyPointsStrategy())
     else:
-        optimizer.set_fantasy_points_strategy(StandardFantasyPointsStrategy())
+        optimizer.set_fantasy_points_strategy(ProgressiveFantasyPointsStrategy(0.15))
 
     optimize_kwargs = {}
     if max_exposure < 1.0:

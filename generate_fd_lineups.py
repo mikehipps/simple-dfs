@@ -353,6 +353,25 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         return thread_id, False, 0, f"Unexpected error: {str(e)}", None
 
 
+def _extract_output_subdir():
+    """
+    Determine sport-specific subdirectory for lineup exports based on OUTPUT_PREFIX.
+    Falls back to the sport type abbreviation if no 3-letter token is present.
+    """
+    tokens = [token for token in OUTPUT_PREFIX.replace('_', '-').split('-') if token]
+    for token in tokens:
+        if len(token) == 3 and token.isalpha():
+            return token.lower()
+    return SPORT_TYPE.lower()[:3]
+
+
+def _get_lineups_output_dir():
+    subdir = _extract_output_subdir()
+    lineups_dir = os.path.join('lineups', subdir)
+    os.makedirs(lineups_dir, exist_ok=True)
+    return lineups_dir
+
+
 def save_partial_results(all_lineups, process_start_time):
     """
     Save partial results when interruption is detected
@@ -371,8 +390,7 @@ def save_partial_results(all_lineups, process_start_time):
         return None, None
     
     # Create lineups directory if it doesn't exist
-    lineups_dir = 'lineups'
-    os.makedirs(lineups_dir, exist_ok=True)
+    lineups_dir = _get_lineups_output_dir()
     
     # Generate partial file names with timestamp and actual lineup count
     current_time = datetime.now()
@@ -445,10 +463,7 @@ def generate_lineups_dynamic():
         logger.info("Dynamic queue system: Workers continuously pull batches until queue is empty")
         
         # Use ThreadPoolExecutor for better resource management
-        combined_flip_summary = None
-        if SPORT_TYPE.upper() in ("HOCKEY", "NHL"):
-            combined_flip_summary = {"batches": 0, "team_hits": 0, "line1_hits": 0, "line2_hits": 0,
-                                     "pp1_hits": 0, "pp2_hits": 0, "goalie_bonus_hits": 0}
+        combined_flip_summary = {}
 
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             # Submit all worker tasks with dynamic queue
@@ -474,9 +489,9 @@ def generate_lineups_dynamic():
                     if success:
                         successful_threads += 1
                         total_lineups_generated += lineups_count
-                        if combined_flip_summary is not None and flip_summary:
-                            for key in combined_flip_summary:
-                                combined_flip_summary[key] += flip_summary.get(key, 0)
+                        if flip_summary:
+                            for key, value in flip_summary.items():
+                                combined_flip_summary[key] = combined_flip_summary.get(key, 0) + value
                         logger.info(f"Thread {thread_id} completed successfully with {lineups_count} lineups")
                     else:
                         logger.error(f"Thread {thread_id} failed: {error}")
@@ -505,8 +520,7 @@ def generate_lineups_dynamic():
             return False
         
         # Create lineups directory if it doesn't exist
-        lineups_dir = 'lineups'
-        os.makedirs(lineups_dir, exist_ok=True)
+        lineups_dir = _get_lineups_output_dir()
         
         # Generate file names with dynamic timestamp and lineup count
         current_time = datetime.now()
@@ -656,7 +670,7 @@ def _normalize_unit(value):
         return text
 
 
-def generate_lineup_summary(lineups, metadata, flip_summary, output_file):
+def generate_lineup_summary(lineups, metadata, flip_summary, output_file, sport_type):
     logger = logging.getLogger(__name__)
     try:
         total_lineups = len(lineups)
@@ -665,6 +679,7 @@ def generate_lineup_summary(lineups, metadata, flip_summary, output_file):
 
         from collections import Counter, defaultdict
         import statistics
+        sport_upper = sport_type.upper()
 
         projections = [lu.fantasy_points_projection for lu in lineups]
         salaries = [lu.salary_costs for lu in lineups]
@@ -674,6 +689,8 @@ def generate_lineup_summary(lineups, metadata, flip_summary, output_file):
         team_exposure = Counter()
         line_stack_counts = Counter()
         pp_stack_counts = Counter()
+        player_exposure = Counter()
+        position_counts = Counter()
 
         for lineup in lineups:
             team_counts = Counter(p.team for p in lineup.players)
@@ -681,6 +698,10 @@ def generate_lineup_summary(lineups, metadata, flip_summary, output_file):
                 team_exposure[team] += 1
             max_team_stack_dist[max(team_counts.values())] += 1
             lineup_unique_teams[len(team_counts)] += 1
+            for player in lineup.players:
+                player_exposure[player.full_name] += 1
+                for pos in player.positions:
+                    position_counts[pos] += 1
 
             # Line/PP stacks
             team_line_counts = defaultdict(lambda: defaultdict(int))
@@ -719,29 +740,62 @@ def generate_lineup_summary(lineups, metadata, flip_summary, output_file):
                 count = lineup_unique_teams[unique_count]
                 fh.write(f"  {unique_count} teams: {count} lineups ({count/total_lineups:.1%})\n")
 
-            fh.write("\nLine stacks (>=2 players same team & line):\n")
-            if line_stack_counts:
-                for key, count in line_stack_counts.most_common(10):
-                    fh.write(f"  {key}: {count}\n")
+            fh.write("\nTop team exposures:\n")
+            if team_exposure:
+                for team, count in team_exposure.most_common(10):
+                    fh.write(f"  {team}: {count} lineups ({count/total_lineups:.1%})\n")
             else:
                 fh.write("  None\n")
 
-            fh.write("\nPower-play stacks (>=2 players same team & PP unit):\n")
-            if pp_stack_counts:
-                for key, count in pp_stack_counts.most_common(10):
-                    fh.write(f"  {key}: {count}\n")
+            fh.write("\nTop player exposures:\n")
+            if player_exposure:
+                for name, count in player_exposure.most_common(15):
+                    fh.write(f"  {name}: {count} lineups ({count/total_lineups:.1%})\n")
             else:
                 fh.write("  None\n")
 
-        if flip_summary:
-            fh.write("\nRandom bias flip summary:\n")
-            fh.write(f"  Batches processed: {flip_summary.get('batches', 0)}\n")
-            fh.write(f"  Team flips won: {flip_summary.get('team_hits', 0)}\n")
-            fh.write(f"  Line 1 flips won: {flip_summary.get('line1_hits', 0)}\n")
-            fh.write(f"  Line 2 flips won: {flip_summary.get('line2_hits', 0)}\n")
-            fh.write(f"  PP1 flips won: {flip_summary.get('pp1_hits', 0)}\n")
-            fh.write(f"  PP2 flips won: {flip_summary.get('pp2_hits', 0)}\n")
-            fh.write(f"  Goalie/Line1D bonuses: {flip_summary.get('goalie_bonus_hits', 0)}\n")
+            fh.write("\nPosition counts across all lineups:\n")
+            if position_counts:
+                for pos, count in position_counts.most_common():
+                    fh.write(f"  {pos}: {count} selections ({count/(total_lineups):.2f} per lineup)\n")
+            else:
+                fh.write("  None\n")
+
+            if sport_upper in ("HOCKEY", "NHL"):
+                fh.write("\nLine stacks (>=2 players same team & line):\n")
+                if line_stack_counts:
+                    for key, count in line_stack_counts.most_common(10):
+                        fh.write(f"  {key}: {count}\n")
+                else:
+                    fh.write("  None\n")
+
+                fh.write("\nPower-play stacks (>=2 players same team & PP unit):\n")
+                if pp_stack_counts:
+                    for key, count in pp_stack_counts.most_common(10):
+                        fh.write(f"  {key}: {count}\n")
+                else:
+                    fh.write("  None\n")
+
+            if flip_summary:
+                fh.write("\nRandom bias flip summary:\n")
+                label_map = {
+                    "batches": "Batches processed",
+                    "team_hits": "Team flips won",
+                    "line1_hits": "Line 1 flips won",
+                    "line2_hits": "Line 2 flips won",
+                    "pp1_hits": "PP1 flips won",
+                    "pp2_hits": "PP2 flips won",
+                    "goalie_bonus_hits": "Goalie/Line1D bonuses",
+                    "team_flips": "Team flips won",
+                    "pass_flips": "Passing flips won",
+                    "rush_flips": "Rushing flips won",
+                    "team_players_boosted": "Players boosted by team flips",
+                    "pass_players_boosted": "Players boosted by pass flips",
+                    "rush_players_boosted": "Players boosted by rush flips",
+                }
+                for key, value in sorted(flip_summary.items()):
+                    label = label_map.get(key, key.replace('_', ' ').title())
+                    fh.write(f"  {label}: {value}\n")
 
         return True
     except Exception as e:
@@ -790,14 +844,14 @@ def main():
             else:
                 logger.error("Player usage report generation failed!")
             
-            summary_path = None
+            summary_path = lineup_filepath.replace("-lineups.csv", "-summary.txt")
+            metadata = None
             if SPORT_TYPE.upper() in ("HOCKEY", "NHL"):
-                summary_path = lineup_filepath.replace("-lineups.csv", "-summary.txt")
                 metadata = load_hockey_metadata(CSV_FILE)
-                if generate_lineup_summary(all_lineups, metadata, flip_summary, summary_path):
-                    logger.info(f"Lineup summary saved to: {summary_path}")
-                else:
-                    logger.warning("Failed to generate lineup summary.")
+            if generate_lineup_summary(all_lineups, metadata, flip_summary, summary_path, SPORT_TYPE):
+                logger.info(f"Lineup summary saved to: {summary_path}")
+            else:
+                logger.warning("Failed to generate lineup summary.")
             logger.info("Lineup generation completed successfully!")
             logger.info(f"Lineups saved to: {lineup_filepath}")
             logger.info(f"Usage report saved to: {usage_filepath}")

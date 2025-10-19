@@ -8,6 +8,11 @@ Will be implemented in future phases.
 import logging
 from sport_helpers.base import SportHelper
 
+try:
+    import fd_inputs as _cfg
+except ImportError:  # pragma: no cover
+    _cfg = object()
+
 
 class NBAHelper(SportHelper):
     """
@@ -76,7 +81,7 @@ class NBAHelper(SportHelper):
         Returns:
             float: Minimum salary offset as a decimal (0.05 for 5% offset)
         """
-        return 0.05  # 5% offset for NBA
+        return getattr(_cfg, "NBA_MIN_SALARY_OFFSET", getattr(_cfg, "MIN_SALARY_OFFSET", 0.05))
     
     def get_optimizer_settings(self):
         """

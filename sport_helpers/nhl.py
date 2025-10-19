@@ -100,7 +100,7 @@ class NHLHelper(SportHelper):
         Returns:
             float: Minimum salary offset as a decimal (0.05 for 5% offset)
         """
-        return 0.05  # 5% offset for NHL
+        return getattr(_cfg, "NHL_MIN_SALARY_OFFSET", getattr(_cfg, "MIN_SALARY_OFFSET", 0.05))
     
     def get_optimizer_settings(self):
         """

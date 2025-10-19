@@ -1,12 +1,20 @@
 """
 NFL Sport Helper
 
-NFL-specific helper implementation with D/ST vs opposing QB/RB constraints
-and NFL-specific budget and configuration settings.
+NFL-specific helper implementation with D/ST vs opposing QB/RB constraints,
+projection randomization hooks, and NFL-specific budget/configuration settings.
 """
 
 import logging
+from collections import defaultdict
+from random import Random
+
 from sport_helpers.base import SportHelper
+
+try:
+    import fd_inputs as _cfg
+except ImportError:  # pragma: no cover
+    _cfg = object()
 
 
 class NFLHelper(SportHelper):
@@ -22,6 +30,24 @@ class NFLHelper(SportHelper):
     def __init__(self):
         """Initialize NFL helper with default configuration."""
         self.logger = logging.getLogger(__name__)
+        self.team_flip_prob = getattr(_cfg, "NFL_TEAM_FLIP_PROB", 0.5)
+        self.team_flip_bonus = getattr(_cfg, "NFL_TEAM_FLIP_BONUS", 0.05)
+        self.pass_flip_prob = getattr(_cfg, "NFL_PASS_FLIP_PROB", 0.5)
+        self.pass_flip_bonus = getattr(_cfg, "NFL_PASS_FLIP_BONUS", 0.05)
+        self.rush_flip_prob = getattr(_cfg, "NFL_RUSH_FLIP_PROB", 0.5)
+        self.rush_flip_bonus = getattr(_cfg, "NFL_RUSH_FLIP_BONUS", 0.05)
+        self.flip_summary = {
+            "batches": 0,
+            "team_flips": 0,
+            "pass_flips": 0,
+            "rush_flips": 0,
+            "team_players_boosted": 0,
+            "pass_players_boosted": 0,
+            "rush_players_boosted": 0,
+        }
+        self._base_fppg = {}
+        self._base_floor = {}
+        self._base_ceil = {}
     
     def apply_constraints(self, optimizer):
         """
@@ -84,7 +110,7 @@ class NFLHelper(SportHelper):
         Returns:
             float: Minimum salary offset as a decimal (0.05 for 5% offset)
         """
-        return 0.05  # 5% offset for NFL
+        return getattr(_cfg, "NFL_MIN_SALARY_OFFSET", getattr(_cfg, "MIN_SALARY_OFFSET", 0.05))
     
     def get_optimizer_settings(self):
         """
@@ -122,3 +148,99 @@ class NFLHelper(SportHelper):
         """
         self.logger.info(f"NFL-specific post-processing for {len(lineups)} lineups")
         return lineups
+
+    # ---- random bias helpers -------------------------------------------------
+    def apply_random_bias(self, optimizer, rng: Random):
+        """
+        Apply per-batch random projection bumps to encourage varied team outcomes.
+
+        Coin flips are performed per team for:
+            * Team-wide bump (all players)
+            * Passing bump (QB/WR/TE)
+            * Rushing bump (RB/DST)
+        """
+        players = optimizer.player_pool.all_players
+        if not players:
+            return
+
+        # Cache base projections the first time we see players.
+        if not self._base_fppg:
+            for player in players:
+                self._base_fppg[player.id] = player.fppg
+                self._base_floor[player.id] = player.fppg_floor
+                self._base_ceil[player.id] = player.fppg_ceil
+
+        # Reset projections to original values before applying new randomness.
+        for player in players:
+            base = self._base_fppg.get(player.id)
+            if base is not None:
+                player.fppg = base
+                if player.id in self._base_floor and self._base_floor[player.id] is not None:
+                    player.fppg_floor = self._base_floor[player.id]
+                if player.id in self._base_ceil and self._base_ceil[player.id] is not None:
+                    player.fppg_ceil = self._base_ceil[player.id]
+
+        team_players = defaultdict(list)
+        for player in players:
+            team_players[player.team].append(player)
+
+        team_flip = {team: rng.random() < self.team_flip_prob for team in team_players}
+        pass_flip = {team: rng.random() < self.pass_flip_prob for team in team_players}
+        rush_flip = {team: rng.random() < self.rush_flip_prob for team in team_players}
+
+        pass_positions = {"QB", "WR", "TE"}
+        rush_positions = {"RB"}
+        defense_positions = {"D", "DST", "DEF"}
+
+        team_players_boosted = 0
+        pass_players_boosted = 0
+        rush_players_boosted = 0
+
+        for team, players_in_team in team_players.items():
+            team_multiplier = 1 + self.team_flip_bonus if team_flip.get(team) else 1
+            pass_multiplier = 1 + self.pass_flip_bonus if pass_flip.get(team) else 1
+            rush_multiplier = 1 + self.rush_flip_bonus if rush_flip.get(team) else 1
+
+            if team_flip.get(team):
+                team_players_boosted += len(players_in_team)
+            if pass_flip.get(team):
+                pass_players_boosted += sum(
+                    1 for player in players_in_team if pass_positions.intersection(player.positions)
+                )
+            if rush_flip.get(team):
+                rush_players_boosted += sum(
+                    1
+                    for player in players_in_team
+                    if rush_positions.intersection(player.positions) or defense_positions.intersection(player.positions)
+                )
+
+            for player in players_in_team:
+                multiplier = 1.0
+                base = self._base_fppg.get(player.id)
+                if base is None:
+                    continue
+                if team_flip.get(team):
+                    multiplier *= team_multiplier
+                if pass_flip.get(team) and pass_positions.intersection(player.positions):
+                    multiplier *= pass_multiplier
+                if rush_flip.get(team) and (
+                    rush_positions.intersection(player.positions) or defense_positions.intersection(player.positions)
+                ):
+                    multiplier *= rush_multiplier
+
+                player.fppg = base * multiplier
+                if player.id in self._base_floor and self._base_floor[player.id] is not None:
+                    player.fppg_floor = self._base_floor[player.id] * multiplier
+                if player.id in self._base_ceil and self._base_ceil[player.id] is not None:
+                    player.fppg_ceil = self._base_ceil[player.id] * multiplier
+
+        self.flip_summary["batches"] += 1
+        self.flip_summary["team_flips"] += sum(1 for hit in team_flip.values() if hit)
+        self.flip_summary["pass_flips"] += sum(1 for hit in pass_flip.values() if hit)
+        self.flip_summary["rush_flips"] += sum(1 for hit in rush_flip.values() if hit)
+        self.flip_summary["team_players_boosted"] += team_players_boosted
+        self.flip_summary["pass_players_boosted"] += pass_players_boosted
+        self.flip_summary["rush_players_boosted"] += rush_players_boosted
+
+    def get_random_bias_summary(self):
+        return dict(self.flip_summary)

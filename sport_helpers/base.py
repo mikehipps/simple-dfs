@@ -8,6 +8,11 @@ Each sport helper implements methods for constraints, budget, validation, and co
 from abc import ABC, abstractmethod
 from pydfs_lineup_optimizer import get_optimizer
 
+try:
+    import fd_inputs as _cfg
+except ImportError:  # pragma: no cover
+    _cfg = object()
+
 
 class SportHelper(ABC):
     """
@@ -74,7 +79,7 @@ class SportHelper(ABC):
         Returns:
             float: Minimum salary offset as a decimal (e.g., 0.05 for 5% offset)
         """
-        return 0.05  # Default 5% offset
+        return getattr(_cfg, "MIN_SALARY_OFFSET", 0.05)
     
     def get_optimizer_settings(self):
         """
