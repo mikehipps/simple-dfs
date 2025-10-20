@@ -34,6 +34,7 @@ from pydfs_lineup_optimizer import Site, Sport, get_optimizer
 from pydfs_lineup_optimizer.exceptions import LineupOptimizerException
 from pydfs_lineup_optimizer.solvers.mip_solver import MIPSolver
 from pydfs_lineup_optimizer.sites.fanduel.classic import settings
+from pydfs_lineup_optimizer.fantasy_points_strategy import ProgressiveFantasyPointsStrategy
 from custom_random_strategy import CustomRandomFantasyPointsStrategy
 from sport_helpers import get_sport_helper
 
@@ -51,6 +52,7 @@ try:
         CSV_FILE,
         SPORT_TYPE,
         OUTPUT_PREFIX,
+        PROGRESSIVE_FACTOR,
         ENABLE_RANDOM
     )
 except ImportError:
@@ -259,8 +261,12 @@ def generate_lineups_dynamic_worker(thread_id, processed_csv, random_values_dict
         optimizer = get_optimizer(Site.FANDUEL, sport)
         optimizer._solver = MIPSolver()  # Use MIP solver instead of default
         
+        # Apply ProgressiveFantasyPointsStrategy if enabled
+        if PROGRESSIVE_FACTOR > 0.0:
+            logger.info(f"Thread {thread_id}: Using ProgressiveFantasyPointsStrategy with Min/Max Deviation columns")
+            optimizer.set_fantasy_points_strategy(ProgressiveFantasyPointsStrategy())
         # Apply CustomRandomFantasyPointsStrategy if enabled
-        if ENABLE_RANDOM:
+        elif ENABLE_RANDOM:
             logger.info(f"Thread {thread_id}: Using CustomRandomFantasyPointsStrategy with Min/Max Deviation columns")
             optimizer.set_fantasy_points_strategy(CustomRandomFantasyPointsStrategy())
         else:
